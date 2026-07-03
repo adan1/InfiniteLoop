@@ -2,7 +2,6 @@
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.exhibition;
-using AscNet.Table.V2.share.reward;
 
 namespace AscNet.GameServer.Handlers
 {
@@ -30,15 +29,37 @@ namespace AscNet.GameServer.Handlers
         {
             GatherRewardRequest req = MessagePackSerializer.Deserialize<GatherRewardRequest>(packet.Content);
             ExhibitionRewardTable? exhibitionReward = TableReaderV2.Parse<ExhibitionRewardTable>().Find(x => x.Id == req.Id);
-            IEnumerable<RewardGoodsTable> rewardGoods = TableReaderV2.Parse<RewardGoodsTable>().Where(x => (TableReaderV2.Parse<RewardTable>().Find(x => x.Id == exhibitionReward?.RewardId)?.SubIds ?? new List<int>()).Contains(x.Id));
+            if (exhibitionReward is null || exhibitionReward.RewardId is null or <= 0)
+            {
+                session.SendResponse(new GatherRewardResponse() { Code = 1 }, packet.Id);
+                return;
+            }
+
+            var rewardGoodsTables = RewardHandler.GetRewardGoods(exhibitionReward.RewardId.Value);
+            if (rewardGoodsTables.Count == 0)
+            {
+                session.SendResponse(new GatherRewardResponse() { Code = 1 }, packet.Id);
+                return;
+            }
+
+            if (!session.player.AddGatherReward(req.Id))
+            {
+                session.SendResponse(new GatherRewardResponse() { Code = 1 }, packet.Id);
+                return;
+            }
+
+            List<RewardGoods> rewardGoods = RewardHandler.GiveRewards(rewardGoodsTables, session);
+            session.player.Save();
+            session.inventory.Save();
+            session.character.Save();
 
             GatherRewardResponse rsp = new()
             {
-                RewardGoods = RewardHandler.GiveRewards(rewardGoods, session)
+                Code = 0,
+                RewardGoods = rewardGoods
             };
 
-            session.player.GatherRewards.Add(req.Id);
-            session.SendPush(new NotifyGatherReward() { Id =  req.Id });
+            session.SendPush(new NotifyGatherReward() { Id = req.Id });
             session.SendResponse(rsp, packet.Id);
         }
     }

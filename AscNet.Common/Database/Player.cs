@@ -35,6 +35,7 @@ namespace AscNet.Common.Database
                     DisplayCharId = 1021001,
                     DisplayCharIdList = new() { 1021001 },
                     Birthday = null,
+                    Gender = 0,
                     HonorLevel = 1,
                     ServerId = "1",
                     CurrTeamId = 1,
@@ -49,7 +50,9 @@ namespace AscNet.Common.Database
                     },
                     CreateTime = DateTimeOffset.Now.ToUnixTimeSeconds(),
                     LastLoginTime = DateTimeOffset.Now.ToUnixTimeSeconds(),
-                    Flags = 1
+                    ChangeGenderTime = 0,
+                    Flags = 1,
+                    NewPlayerTaskActiveDay = 0
                 },
                 HeadPortraits = new(),
                 TeamGroups = new()
@@ -101,6 +104,17 @@ namespace AscNet.Common.Database
             return true;
         }
 
+        public bool AddGatherReward(int id)
+        {
+            if (GatherRewards.Contains(id))
+            {
+                return false;
+            }
+
+            GatherRewards.Add(id);
+            return true;
+        }
+
         public void Save()
         {
             collection.ReplaceOne(Builders<Player>.Filter.Eq(x => x.Id, Id), this);
@@ -122,7 +136,7 @@ namespace AscNet.Common.Database
         public List<HeadPortraitList> HeadPortraits { get; set; }
 
         [BsonElement("gather_rewards")]
-        public List<int> GatherRewards { get; set; } = new();
+        public List<int> GatherRewards { get; set; } = [5];
 
         [BsonElement("use_background_id")]
         public int UseBackgroundId { get; set; } = 14000001;

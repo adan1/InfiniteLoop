@@ -16,8 +16,15 @@ namespace AscNet.SDKServer
 
             var app = builder.Build();
 
-            app.Urls.Add("http://*:80");
-            app.Urls.Add("https://*:443");
+            foreach (string url in GetUrls(args))
+                if (!app.Urls.Contains(url))
+                    app.Urls.Add(url);
+
+            if (!app.Urls.Any())
+            {
+                app.Urls.Add("http://*:80");
+                app.Urls.Add("https://*:443");
+            }
 
             IEnumerable<Type> controllers = AppDomain.CurrentDomain.GetAssemblies()
                 .SelectMany(s => s.GetTypes())
@@ -36,6 +43,19 @@ namespace AscNet.SDKServer
 
             new Thread(() => app.Run()).Start();
             log.Info($"{nameof(SDKServer)} started in port {string.Join(", ", app.Urls.Select(x => x.Split(':').Last()))}!");
+        }
+
+        private static IEnumerable<string> GetUrls(string[] args)
+        {
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "--urls" && i + 1 < args.Length)
+                    return args[i + 1].Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (args[i].StartsWith("--urls=", StringComparison.Ordinal))
+                    return args[i]["--urls=".Length..].Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            }
+
+            return [];
         }
 
         private class RequestLoggingMiddleware

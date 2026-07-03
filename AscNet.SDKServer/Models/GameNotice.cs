@@ -20,6 +20,15 @@ namespace AscNet.SDKServer.Models
         [JsonProperty("Order", NullValueHandling = NullValueHandling.Ignore)]
         public long? Order { get; set; }
 
+        [JsonProperty("LoginEject", NullValueHandling = NullValueHandling.Ignore)]
+        public long? LoginEject { get; set; }
+
+        [JsonProperty("BluePoint", NullValueHandling = NullValueHandling.Ignore)]
+        public long? BluePoint { get; set; }
+
+        [JsonProperty("Preload", NullValueHandling = NullValueHandling.Ignore)]
+        public long? Preload { get; set; }
+
         [JsonProperty("ModifyTime", NullValueHandling = NullValueHandling.Ignore)]
         public long? ModifyTime { get; set; }
 
@@ -31,6 +40,9 @@ namespace AscNet.SDKServer.Models
 
         [JsonProperty("Content", NullValueHandling = NullValueHandling.Ignore)]
         public NoticeContent[] Content { get; set; }
+
+        [JsonProperty("LoginPlatformList", NullValueHandling = NullValueHandling.Ignore)]
+        public int[] LoginPlatformList { get; set; }
 
         public partial class NoticeContent
         {

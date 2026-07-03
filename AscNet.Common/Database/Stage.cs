@@ -72,6 +72,17 @@ namespace AscNet.Common.Database
             return true;
         }
 
+        public bool AddFinishedTask(int taskId)
+        {
+            if (FinishedTasks.Contains(taskId))
+            {
+                return false;
+            }
+
+            FinishedTasks.Add(taskId);
+            return true;
+        }
+
         public void Save()
         {
             collection.ReplaceOne(Builders<Stage>.Filter.Eq(x => x.Id, Id), this);
@@ -92,5 +103,8 @@ namespace AscNet.Common.Database
         // List of claimed StageIds
         [BsonElement("course")]
         public List<uint> Course { get; set; } = new();
+
+        [BsonElement("finished_tasks")]
+        public List<int> FinishedTasks { get; set; } = new();
     }
 }

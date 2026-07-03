@@ -1,13 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Security.Cryptography;
-using System.Text;
-using System.Threading.Tasks;
-using AscNet.Common;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
-using AscNet.Table.V2.share.exhibition;
 using AscNet.Table.V2.share.fuben.mainline;
 using AscNet.Table.V2.share.reward;
 using MessagePack;
@@ -36,34 +28,83 @@ namespace AscNet.GameServer.Handlers
         [RequestPacketHandler("ReceiveTreasureRewardRequest")]
         public static void HandleReceiveTreasureRewardRequestHandler(Session session, Packet.Request packet)
         {
-            var request = MessagePackSerializer.Deserialize<TreasureRewardRequest>(packet.Content);
-            var treasure = TableReaderV2.Parse<TreasureTable>().Find(x => x.TreasureId == request.TreasureId);
-            var rewardId = treasure?.RewardId.ToString();
-            if (rewardId == null)
-            {
-                session.SendResponse(new TreasureRewardResponse() { Code = 1 }, packet.Id);
-                return;
-            }
-
-            var rewardGoods = TableReaderV2.Parse<RewardGoodsTable>().Where(x =>
-            {
-                var id = x.Id.ToString();
-                return id.StartsWith(rewardId) && id.Length > rewardId.Length;
-            });
-
-            var success = session.player.AddTreasure(request.TreasureId);
-            if (!success)
-            {
-                session.SendResponse(new TreasureRewardResponse() { Code = 1 }, packet.Id);
-                return;
-            }
-
-            TreasureRewardResponse response = new()
-            {
-                RewardGoodsList = RewardHandler.GiveRewards(rewardGoods, session)
-            };
-
+            TreasureRewardRequest request = MessagePackSerializer.Deserialize<TreasureRewardRequest>(packet.Content);
+            TreasureRewardResponse response = ClaimMainLineTreasureReward(session, request.TreasureId);
             session.SendResponse(response, packet.Id);
+        }
+
+        private static TreasureRewardResponse ClaimMainLineTreasureReward(Session session, int treasureId)
+        {
+            TreasureTable? treasure = TableReaderV2.Parse<TreasureTable>().FirstOrDefault(x => x.TreasureId == treasureId);
+            if (treasure is null)
+            {
+                return new TreasureRewardResponse { Code = 20003008 };
+            }
+
+            if (session.player.FubenMainLineData.TreasureData.Contains(treasureId))
+            {
+                return new TreasureRewardResponse { Code = 20003010 };
+            }
+
+            if (!HasEnoughChapterStars(session, treasureId, treasure.RequireStar))
+            {
+                return new TreasureRewardResponse { Code = 20003009 };
+            }
+
+            List<RewardGoodsTable> rewardGoods = RewardHandler.GetRewardGoods(treasure.RewardId);
+            if (rewardGoods.Count == 0)
+            {
+                return new TreasureRewardResponse { Code = 20003008 };
+            }
+
+            if (!session.player.AddTreasure(treasureId))
+            {
+                return new TreasureRewardResponse { Code = 20003010 };
+            }
+
+            List<RewardGoods> rewardGoodsList = RewardHandler.GiveRewards(rewardGoods, session);
+            session.player.Save();
+            session.inventory.Save();
+            session.character.Save();
+
+            return new TreasureRewardResponse
+            {
+                Code = 0,
+                RewardGoodsList = rewardGoodsList
+            };
+        }
+
+        private static bool HasEnoughChapterStars(Session session, int treasureId, int requiredStars)
+        {
+            return TableReaderV2.Parse<ChapterTable>()
+                .Where(x => x.TreasureId.Contains(treasureId))
+                .Any(chapter => CountChapterStars(session, chapter.StageId) >= requiredStars);
+        }
+
+        private static int CountChapterStars(Session session, IEnumerable<int> stageIds)
+        {
+            int total = 0;
+            foreach (int stageId in stageIds)
+            {
+                if (session.stage.Stages.TryGetValue(stageId, out StageDatum? stageData) && stageData.Passed)
+                {
+                    total += CountStarBits(stageData.StarsMark);
+                }
+            }
+
+            return total;
+        }
+
+        private static int CountStarBits(long starsMark)
+        {
+            int count = 0;
+            while (starsMark > 0)
+            {
+                count += (int)(starsMark & 1);
+                starsMark >>= 1;
+            }
+
+            return count;
         }
     }
 }

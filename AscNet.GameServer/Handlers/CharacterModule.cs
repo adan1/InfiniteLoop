@@ -9,7 +9,6 @@ using AscNet.Table.V2.share.character.quality;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.item;
 using MessagePack;
-using MongoDB.Driver.Linq;
 
 namespace AscNet.GameServer.Handlers
 {
@@ -123,16 +122,38 @@ namespace AscNet.GameServer.Handlers
 
     internal class CharacterModule
     {
+        private static void SaveCharacterProgress(Session session)
+        {
+            session.character.Save();
+            session.inventory.Save();
+        }
+
         [RequestPacketHandler("CharacterLevelUpRequest")]
         public static void CharacterLevelUpRequestHandler(Session session, Packet.Request packet)
         {
             CharacterLevelUpRequest request = packet.Deserialize<CharacterLevelUpRequest>();
             CharacterTable? characterData = TableReaderV2.Parse<CharacterTable>().FirstOrDefault(x => x.Id == request.TemplateId);
 
-            if (characterData is null || !session.character.Characters.Any(x => x.Id == characterData.Id))
+            CharacterData? character = session.character.Characters.FirstOrDefault(x => x.Id == characterData?.Id);
+            if (characterData is null || character is null)
             {
                 // CharacterManagerGetCharacterTemplateNotFound
                 session.SendResponse(new CharacterLevelUpResponse() { Code = 20009001 }, packet.Id);
+                return;
+            }
+
+            if (character.Level >= session.player.PlayerData.Level)
+            {
+                // CharacterManagerLevelUpMaxLevel
+                session.SendResponse(new CharacterLevelUpResponse() { Code = 20009014 }, packet.Id);
+                return;
+            }
+
+            CharacterLevelUpTemplate? levelUpTemplate = Character.characterLevelUpTemplates.FirstOrDefault(x => x.Level == character.Level && x.Type == characterData.Type);
+            if (levelUpTemplate is null)
+            {
+                // CharacterManagerGetLevelUpTemplateNotFound
+                session.SendResponse(new CharacterLevelUpResponse() { Code = 20009002 }, packet.Id);
                 return;
             }
 
@@ -141,13 +162,20 @@ namespace AscNet.GameServer.Handlers
             foreach (var item in request.UseItems)
             {
                 ItemTable? itemTable = TableReaderV2.Parse<ItemTable>().FirstOrDefault(x => x.Id == item.Key);
-                if (itemTable is not null)
+                int itemExp = itemTable?.GetCharacterExp(characterData.Type) ?? 0;
+                if (itemExp <= 0 || item.Value <= 0)
                 {
-                    totalExp += itemTable.GetCharacterExp(characterData.Type) * item.Value;
-                    notifyItemData.ItemDataList.Add(session.inventory.Do(item.Key, item.Value * -1));
+                    continue;
                 }
+
+                totalExp += itemExp * item.Value;
+                notifyItemData.ItemDataList.Add(session.inventory.Do(item.Key, item.Value * -1));
             }
-            session.SendPush(notifyItemData);
+
+            if (notifyItemData.ItemDataList.Count > 0)
+            {
+                session.SendPush(notifyItemData);
+            }
 
             var characterUp = session.character.AddCharacterExp(characterData.Id, totalExp, (int)session.player.PlayerData.Level);
             if (characterUp is not null)
@@ -156,6 +184,8 @@ namespace AscNet.GameServer.Handlers
                 notifyCharacterData.CharacterDataList.Add(characterUp);
                 session.SendPush(notifyCharacterData);
             }
+
+            SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterLevelUpResponse(), packet.Id);
         }
@@ -190,6 +220,8 @@ namespace AscNet.GameServer.Handlers
                     CharacterDataList = { character }
                 });
             }
+
+            SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterPromoteGradeResponse(), packet.Id);
         }
@@ -246,6 +278,8 @@ namespace AscNet.GameServer.Handlers
             {
                 CharacterDataList = { character }
             });
+
+            SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterActivateStarResponse(), packet.Id);
         }
@@ -305,6 +339,8 @@ namespace AscNet.GameServer.Handlers
                 CharacterDataList = { character }
             });
 
+            SaveCharacterProgress(session);
+
             session.SendResponse(new CharacterPromoteQualityResponse(), packet.Id);
         }
 
@@ -321,6 +357,8 @@ namespace AscNet.GameServer.Handlers
                 notifyCharacterData.CharacterDataList.Add(character);
             }
             session.SendPush(notifyCharacterData);
+
+            SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterUpgradeSkillGroupResponse(), packet.Id);
         }
@@ -343,6 +381,8 @@ namespace AscNet.GameServer.Handlers
 
             session.SendPush(notifyCharacterData);
             session.SendPush(notifyItemData);
+
+            SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterUpgradeSkillGroupResponse(), packet.Id);
         }
@@ -387,6 +427,8 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(notifyItemData);
             session.SendPush(notifyCharacterData);
 
+            SaveCharacterProgress(session);
+
             session.SendResponse(new CharacterUnlockEnhanceSkillResponse(), packet.Id);
         }
 
@@ -425,6 +467,8 @@ namespace AscNet.GameServer.Handlers
             }
             session.SendPush(notifyItemData);
             session.SendPush(notifyCharacterData);
+
+            SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterUpgradeEnhanceSkillResponse(), packet.Id);
         }
@@ -473,6 +517,8 @@ namespace AscNet.GameServer.Handlers
                 session.SendResponse(rsp, packet.Id);
                 return;
             }
+
+            SaveCharacterProgress(session);
 
             session.SendResponse(new CharacterExchangeResponse(), packet.Id);
         }

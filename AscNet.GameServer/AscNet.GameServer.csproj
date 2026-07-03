@@ -4,6 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NoWarn>$(NoWarn);CS8785;AD0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,13 +14,21 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="MessagePack" Version="2.4.59" />
+    <PackageReference Include="MessagePack" Version="3.1.7" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\AscNet.Common\AscNet.Common.csproj" />
-    <ProjectReference Include="..\AscNet.Logging\AscNet.Logging.csproj" />
+    <Reference Include="AscNet.Common">
+      <HintPath>..\AscNet.Common\bin\$(Configuration)\net8.0\AscNet.Common.dll</HintPath>
+    </Reference>
+    <Reference Include="AscNet.Logging">
+      <HintPath>..\AscNet.Logging\bin\$(Configuration)\net8.0\AscNet.Logging.dll</HintPath>
+    </Reference>
   </ItemGroup>
+
+  <Target Name="BuildGameServerDependencies" BeforeTargets="ResolveReferences">
+    <MSBuild Projects="..\AscNet.Common\AscNet.Common.csproj;..\AscNet.Logging\AscNet.Logging.csproj" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net8.0" />
+  </Target>
 
 </Project>

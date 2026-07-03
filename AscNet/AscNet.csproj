@@ -11,6 +11,7 @@
     <ProjectReference Include="..\AscNet.Common\AscNet.Common.csproj" />
     <ProjectReference Include="..\AscNet.GameServer\AscNet.GameServer.csproj" />
     <ProjectReference Include="..\AscNet.SDKServer\AscNet.SDKServer.csproj" />
+    <ProjectReference Include="..\AscNet.Logging\AscNet.Logging.csproj" />
   </ItemGroup>
 	<ItemGroup>
 		<Content Include="..\Resources\**">

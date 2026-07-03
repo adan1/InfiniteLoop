@@ -188,6 +188,23 @@ namespace AscNet.Common.MsgPack
     }
 
     [MessagePackObject(true)]
+    public partial class FubenMainLine2Data
+    {
+        public List<dynamic> StageDataList { get; set; } = new();
+        public List<dynamic> ChapterDataList { get; set; } = new();
+        public List<dynamic> TreasureData { get; set; } = new();
+        public List<dynamic> AchievementData { get; set; } = new();
+        public List<dynamic> EggData { get; set; } = new();
+        public List<dynamic> PassStageIds { get; set; } = new();
+    }
+
+    [MessagePackObject(true)]
+    public partial class NotifyFashionColorData
+    {
+        public List<dynamic> FasionColors { get; set; } = new();
+    }
+
+    [MessagePackObject(true)]
     public partial class FubenUrgentEventData
     {
         public object UrgentEventData { get; set; }
@@ -223,6 +240,7 @@ namespace AscNet.Common.MsgPack
         public long DisplayCharId { get; set; }
         public List<long> DisplayCharIdList { get; set; } = new();
         public Birthday? Birthday { get; set; }
+        public long Gender { get; set; }
         public long HonorLevel { get; set; }
         public string ServerId { get; set; }
         public long Likes { get; set; }
@@ -235,6 +253,7 @@ namespace AscNet.Common.MsgPack
         public long DailyReceiveGiftCount { get; set; }
         public long DailyActivenessRewardStatus { get; set; }
         public long WeeklyActivenessRewardStatus { get; set; }
+        public int NewPlayerTaskActiveDay { get; set; }
         public List<long> Marks { get; set; } = new();
         public List<long> GuideData { get; set; } = new();
         public List<long> Communications { get; set; } = new();
@@ -245,6 +264,7 @@ namespace AscNet.Common.MsgPack
         public long LastLoginTime { get; set; }
         public long ReportTime { get; set; }
         public long ChangeNameTime { get; set; }
+        public long ChangeGenderTime { get; set; }
         public long Flags { get; set; }
     }
 
@@ -318,6 +338,8 @@ namespace AscNet.Common.MsgPack
         public BaseEquipLoginData BaseEquipLoginData { get; set; }
         public FubenData FubenData { get; set; }
         public FubenMainLineData FubenMainLineData { get; set; }
+        public FubenMainLine2Data FubenMainLine2Data { get; set; }
+        public NotifyFashionColorData FashionColorData { get; set; }
         public FubenLoginData FubenChapterExtraLoginData { get; set; }
         public FubenUrgentEventData FubenUrgentEventData { get; set; }
         public List<dynamic> AutoFightRecords { get; set; } = new();
@@ -1247,12 +1269,24 @@ namespace AscNet.Common.MsgPack
             public Int32 ChallengeCount { get; set; }
             public UInt32 RemainTime { get; set; }
             public Int32 AutoFightCount { get; set; }
-            public dynamic? CharacterPoints { get; set; }
+            public Dictionary<Int32, Int32> CharacterPoints { get; set; } = new();
             public List<dynamic> HistoryList { get; set; } = new();
             public List<dynamic> RewardIds { get; set; } = new();
             public Int32 RankPlatform { get; set; }
             public List<Int32> BossList { get; set; } = new();
             public List<dynamic> TrialStageInfoList { get; set; } = new();
+            public List<dynamic> BestiraryStageInfoList { get; set; } = new();
+            public List<dynamic> ChallengeStageHistoryList { get; set; } = new();
+            public List<dynamic> StageRecordList { get; set; } = new();
+            public Int32 RewardGroupId { get; set; }
+            public Int32 AfreshId { get; set; }
+            public Int32 ChallengeSectionId { get; set; }
+            public Int32 ChallengeFeatureGroupId { get; set; }
+            public Int32 ChallengeLevelType { get; set; }
+            public Int32 ChallengeTotalScore { get; set; }
+            public Int32 ChallengeDeleteRecordTime { get; set; }
+            public Int32 CurTotalScore { get; set; }
+            public Boolean IsResetOpen { get; set; }
         }
 
         public NotifyFubenBossSingleDataFubenBossSingleData FubenBossSingleData { get; set; }

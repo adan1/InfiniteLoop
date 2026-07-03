@@ -22,5 +22,8 @@ namespace AscNet.SDKServer.Models
 
         [JsonProperty("Title", NullValueHandling = NullValueHandling.Ignore)]
         public string Title { get; set; }
+
+        [JsonProperty("LoginPlatformList", NullValueHandling = NullValueHandling.Ignore)]
+        public int[] LoginPlatformList { get; set; }
     }
 }

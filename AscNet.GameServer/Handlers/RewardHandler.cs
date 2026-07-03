@@ -34,6 +34,25 @@ namespace AscNet.GameServer.Handlers
             };
         }
 
+        public static List<RewardGoodsTable> GetRewardGoods(int rewardId)
+        {
+            RewardTable? rewardTable = TableReaderV2.Parse<RewardTable>().FirstOrDefault(x => x.Id == rewardId);
+            if (rewardTable is null)
+            {
+                return [];
+            }
+
+            HashSet<int> subIds = rewardTable.SubIds.ToHashSet();
+            if (subIds.Count == 0)
+            {
+                return [];
+            }
+
+            return TableReaderV2.Parse<RewardGoodsTable>()
+                .Where(x => subIds.Contains(x.Id))
+                .ToList();
+        }
+
         public static List<RewardGoods> GiveRewards(IEnumerable<RewardGoodsTable> rewardGoods, Session session)
         {
             List<RewardGoods> rewardGoodsList = [];

@@ -31,6 +31,9 @@ namespace AscNet.SDKServer.Models
 
         [JsonProperty("ShowInPhotograph", NullValueHandling = NullValueHandling.Ignore)]
         public long? ShowInPhotograph { get; set; }
+
+        [JsonProperty("LoginPlatformList", NullValueHandling = NullValueHandling.Ignore)]
+        public int[] LoginPlatformList { get; set; }
     }
 
     public partial class ScrollPicNotice
@@ -43,6 +46,9 @@ namespace AscNet.SDKServer.Models
 
         [JsonProperty("Content", NullValueHandling = NullValueHandling.Ignore)]
         public NoticeContent[] Content { get; set; }
+
+        [JsonProperty("LoginPlatformList", NullValueHandling = NullValueHandling.Ignore)]
+        public int[] LoginPlatformList { get; set; }
 
         public partial class NoticeContent
         {

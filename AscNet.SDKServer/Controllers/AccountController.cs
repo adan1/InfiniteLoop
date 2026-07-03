@@ -8,6 +8,7 @@ namespace AscNet.SDKServer.Controllers
 {
     public class AccountController : IRegisterable
     {
+        private const string GateFallbackUsernameEnv = "ASCNET_GATE_FALLBACK_USERNAME";
         public static void Register(WebApplication app)
         {
             app.MapPost("/api/AscNet/register", (HttpContext ctx) =>
@@ -110,31 +111,66 @@ namespace AscNet.SDKServer.Controllers
 
             app.MapGet("/api/Login/Login", ([FromQuery] int loginType, [FromQuery] int userId, [FromQuery] string token, [FromQuery] string? clientIp) =>
             {
-                Account? account = Account.FromToken(token);
-
-                if (account is null)
+                try
                 {
-                    return JsonConvert.SerializeObject(new
+                    Account? account = Account.FromToken(token) ?? Account.FromUID(userId);
+
+                    if (account is null)
+                        account = GateFallbackAccount(loginType, userId);
+
+                    if (account is null)
+                        return InvalidLoginToken();
+
+                    Player player = Player.FromPlayerId(account.Uid);
+
+                    LoginGate gate = new()
                     {
-                        code = -1,
-                        msg = "Invalid credentials!"
-                    });
+                        Code = 0,
+                        Ip = GameServerTcpHost(),
+                        Port = Common.Common.config.GameServer.Port,
+                        Token = player.Token
+                    };
+
+                    string serializedObject = JsonConvert.SerializeObject(gate);
+                    SDKServer.log.Info(serializedObject);
+                    return serializedObject;
                 }
-
-                Player player = Player.FromPlayerId(account.Uid);
-
-                LoginGate gate = new()
+                catch (Exception ex)
                 {
-                    Code = 0,
-                    Ip = Common.Common.config.GameServer.Host,
-                    Port = Common.Common.config.GameServer.Port,
-                    Token = player.Token
-                };
-
-                string serializedObject = JsonConvert.SerializeObject(gate);
-                SDKServer.log.Info(serializedObject);
-                return serializedObject;
+                    SDKServer.log.Error($"Gate login lookup failed: {ex.Message}");
+                    return InvalidLoginToken();
+                }
             });
+        }
+
+        private static string InvalidLoginToken()
+        {
+            return JsonConvert.SerializeObject(new LoginGate
+            {
+                Code = 13
+            });
+        }
+
+        private static string GameServerTcpHost()
+        {
+            string host = Common.Common.config.GameServer.Host.TrimEnd('/');
+            if (Uri.TryCreate(host, UriKind.Absolute, out Uri? uri) && !string.IsNullOrEmpty(uri.Host))
+                return uri.Host;
+
+            return host;
+        }
+
+        private static Account? GateFallbackAccount(int loginType, int userId)
+        {
+            string? fallbackUsername = Environment.GetEnvironmentVariable(GateFallbackUsernameEnv);
+            if (string.IsNullOrWhiteSpace(fallbackUsername))
+                return null;
+
+            Account? account = Account.FromUsername(fallbackUsername);
+            if (account is not null)
+                SDKServer.log.Warn($"Gate login fallback mapped loginType={loginType} userId={userId} to local account '{fallbackUsername}'.");
+
+            return account;
         }
     }
 }

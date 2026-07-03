@@ -17,6 +17,7 @@ namespace AscNet.Common
                new MongoClientSettings
                {
                    Server = new MongoServerAddress(config.Database.Host, config.Database.Port),
+                   ServerSelectionTimeout = TimeSpan.FromSeconds(2),
                    //    Credential = MongoCredential.CreateCredential("admin", config.Database.Username, config.Database.Password)
                }
            );

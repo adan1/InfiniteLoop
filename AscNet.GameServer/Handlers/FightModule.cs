@@ -155,11 +155,154 @@ namespace AscNet.GameServer.Handlers
     {
         public int Code { get; set; }
     }
+
+    [MessagePackObject(true)]
+    public class KcpConfirmRequest
+    {
+    }
+
+    [MessagePackObject(true)]
+    public class KcpConfirmResponse
+    {
+    }
+
+    [MessagePackObject(true)]
+    public class JoinFightRequest
+    {
+        public long FightId { get; set; }
+        public int PlayerId { get; set; }
+        public string Token { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class JoinFightResponse
+    {
+        public int Code { get; set; }
+        public int Port { get; set; }
+        public uint Conv { get; set; }
+        public object? FightData { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class FightHeartbeatRequest
+    {
+        public int Frame { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class FightHeartbeatResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class FightReconnectRequest
+    {
+        public long FightId { get; set; }
+        public int PlayerId { get; set; }
+        public int Frame { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class FightReconnectResponse
+    {
+        public int Code { get; set; }
+        public int Port { get; set; }
+        public uint Conv { get; set; }
+        public List<dynamic> Operations { get; set; } = new();
+    }
+
+    [MessagePackObject(true)]
+    public class LoadCompleteRequest
+    {
+    }
+
+    [MessagePackObject(true)]
+    public class LoadCompleteResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class CheckCodeRequest
+    {
+        public int Frame { get; set; }
+        public int Code { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class CheckCodeResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class LeaveFightRequest
+    {
+    }
+
+    [MessagePackObject(true)]
+    public class LeaveFightResponse
+    {
+        public int Code { get; set; }
+    }
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
 
     internal class FightModule
     {
+        [RequestPacketHandler("KcpConfirmRequest")]
+        public static void KcpConfirmRequestHandler(Session session, Packet.Request packet)
+        {
+            session.SendResponse(new KcpConfirmResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("JoinFightRequest")]
+        public static void JoinFightRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<JoinFightRequest>(packet.Content);
+            session.SendResponse(new JoinFightResponse
+            {
+                Code = 1023
+            }, packet.Id);
+        }
+
+        [RequestPacketHandler("FightHeartbeatRequest")]
+        public static void FightHeartbeatRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<FightHeartbeatRequest>(packet.Content);
+            session.SendResponse(new FightHeartbeatResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("FightReconnectRequest")]
+        public static void FightReconnectRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<FightReconnectRequest>(packet.Content);
+            session.SendResponse(new FightReconnectResponse
+            {
+                Code = 1033
+            }, packet.Id);
+        }
+
+        [RequestPacketHandler("LoadCompleteRequest")]
+        public static void LoadCompleteRequestHandler(Session session, Packet.Request packet)
+        {
+            session.SendResponse(new LoadCompleteResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("CheckCodeRequest")]
+        public static void CheckCodeRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<CheckCodeRequest>(packet.Content);
+            session.SendResponse(new CheckCodeResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("LeaveFightRequest")]
+        public static void LeaveFightRequestHandler(Session session, Packet.Request packet)
+        {
+            session.SendResponse(new LeaveFightResponse(), packet.Id);
+        }
+
         [RequestPacketHandler("PreFightRequest")]
         public static void PreFightRequestHandler(Session session, Packet.Request packet)
         {
@@ -352,18 +495,22 @@ namespace AscNet.GameServer.Handlers
             }
 
             int challengeCount = session.fight?.PreFight.PreFightData.ChallengeCount ?? 1;
-            stageTable.CardExp *= challengeCount;
-            stageTable.TeamExp *= challengeCount;
+            bool isFirstClear = !session.stage.Stages.ContainsKey(req.Result.StageId);
+            int teamExp = GetStageTeamExp(stageTable, isFirstClear) * challengeCount;
+            int cardExp = GetStageCardExp(stageTable, isFirstClear) * challengeCount;
 
             List<List<RewardGoods>> multiRewards = new();
-            List<RewardTable> rewardTables = TableReaderV2.Parse<RewardTable>().Where(x => session.stage.Stages.ContainsKey(req.Result.StageId) ? x.Id == stageTable.FinishDropId : (x.Id == stageTable.FinishDropId || x.Id == stageTable.FirstRewardId)).ToList();
+            List<RewardTable> rewardTables = TableReaderV2.Parse<RewardTable>().Where(x => isFirstClear ? (x.Id == stageTable.FinishDropId || x.Id == stageTable.FirstRewardId) : x.Id == stageTable.FinishDropId).ToList();
             if (rewardTables.Count == 0)
             {
-                rewardTables.AddRange(TableReaderV2.Parse<RewardTable>().Where(x => session.stage.Stages.ContainsKey(req.Result.StageId) ? x.Id == stageTable.FinishRewardShow : (x.Id == stageTable.FinishRewardShow || x.Id == stageTable.FirstRewardShow)));
+                rewardTables.AddRange(TableReaderV2.Parse<RewardTable>().Where(x => isFirstClear ? (x.Id == stageTable.FinishRewardShow || x.Id == stageTable.FirstRewardShow) : x.Id == stageTable.FinishRewardShow));
             }
 
             NotifyItemDataList notifyItemData = new();
-            notifyItemData.ItemDataList.Add(session.inventory.Do(Inventory.TeamExp, stageTable.TeamExp ?? 0));
+            if (teamExp > 0)
+            {
+                notifyItemData.ItemDataList.Add(session.inventory.Do(Inventory.TeamExp, teamExp));
+            }
 
             for (int i = 0; i < challengeCount; i++)
             {
@@ -376,10 +523,13 @@ namespace AscNet.GameServer.Handlers
                 multiRewards.Add(new List<RewardGoods>(rewards));
             }
 
-            session.SendPush(notifyItemData);
+            if (notifyItemData.ItemDataList.Count > 0)
+            {
+                session.SendPush(notifyItemData);
+            }
             session.ExpSanityCheck();
 
-            if (stageTable.CardExp > 0)
+            if (cardExp > 0)
             {
                 Dictionary<int, long> team = session.player.TeamGroups[(int)session.player.PlayerData.CurrTeamId].TeamData;
                 NotifyCharacterDataList charData = new();
@@ -388,13 +538,14 @@ namespace AscNet.GameServer.Handlers
                 {
                     if (member.Value > 0)
                     {
-                        var character = session.character.AddCharacterExp((int)member.Value, stageTable.CardExp ?? 0, (int)session.player.PlayerData.Level);
+                        var character = session.character.AddCharacterExp((int)member.Value, cardExp, (int)session.player.PlayerData.Level);
                         if (character is not null)
                             charData.CharacterDataList.Add(character);
                     }
                 }
                 
                 session.SendPush(charData);
+                session.character.Save();
             }
 
             StageDatum stageData = new()
@@ -416,6 +567,11 @@ namespace AscNet.GameServer.Handlers
             };
             session.stage.AddStage(stageData);
 
+            session.player.Save();
+            session.inventory.Save();
+            session.character.Save();
+            session.stage.Save();
+
             FightSettleResponse fightSettleResponse = new()
             {
                 Settle = new()
@@ -432,7 +588,29 @@ namespace AscNet.GameServer.Handlers
 
             session.fight = null;
             session.SendPush(new NotifyStageData() { StageList = new() { stageData } });
+            TaskModule.SendStoryTaskSync(session);
             session.SendResponse(fightSettleResponse, packet.Id);
+        }
+        private static int GetStageTeamExp(StageTable stageTable, bool isFirstClear)
+        {
+            int stageExp = stageTable.TeamExp ?? 0;
+            if (isFirstClear)
+            {
+                return stageTable.FirstTeamExp ?? stageExp;
+            }
+
+            return stageExp;
+        }
+
+        private static int GetStageCardExp(StageTable stageTable, bool isFirstClear)
+        {
+            int stageExp = stageTable.CardExp ?? 0;
+            if (isFirstClear)
+            {
+                return stageTable.FirstCardExp ?? stageExp;
+            }
+
+            return stageExp;
         }
     }
 }

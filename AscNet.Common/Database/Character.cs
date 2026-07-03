@@ -138,27 +138,41 @@ namespace AscNet.Common.Database
             var characterData = TableReaderV2.Parse<CharacterTable>().FirstOrDefault(x => x.Id == characterId);
             var character = Characters.FirstOrDefault(x => x.Id == characterId);
 
-            if (character is not null && characterData is not null)
+            if (character is null || characterData is null)
             {
-                levelCheck:
+                return character;
+            }
+
+            int remainingExp = Math.Max(0, exp);
+            while (true)
+            {
                 CharacterLevelUpTemplate? levelUpTemplate = characterLevelUpTemplates.FirstOrDefault(x => x.Level == character.Level && x.Type == characterData.Type);
-                if (levelUpTemplate is not null)
+                if (levelUpTemplate is null)
                 {
-                    if (levelUpTemplate.Exp > exp)
-                    {
-                        character.Exp += (uint)Math.Max(0, exp);
-                    }
-                    else if (maxLvl > 0 && character.Level == maxLvl)
-                    {
-                        character.Exp = (uint)Math.Max(0, levelUpTemplate.Exp);
-                    }
-                    else
-                    {
-                        character.Level++;
-                        exp -= (int)(levelUpTemplate.Exp - character.Exp);
-                        character.Exp = 0;
-                        goto levelCheck;
-                    }
+                    break;
+                }
+
+                bool reachedLevelCap = maxLvl > 0 && character.Level >= maxLvl;
+                if (reachedLevelCap)
+                {
+                    character.Exp = (uint)Math.Min(levelUpTemplate.Exp, (int)character.Exp + remainingExp);
+                    break;
+                }
+
+                int expNeeded = Math.Max(0, levelUpTemplate.Exp - (int)character.Exp);
+                if (expNeeded > remainingExp)
+                {
+                    character.Exp += (uint)remainingExp;
+                    break;
+                }
+
+                remainingExp -= expNeeded;
+                character.Level++;
+                character.Exp = 0;
+
+                if (remainingExp <= 0)
+                {
+                    break;
                 }
             }
 

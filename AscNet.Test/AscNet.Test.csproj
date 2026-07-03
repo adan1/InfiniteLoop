@@ -9,6 +9,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AscNet.Common\AscNet.Common.csproj" />
+    <ProjectReference Include="..\AscNet.SDKServer\AscNet.SDKServer.csproj" />
     <ProjectReference Include="..\AscNet\AscNet.csproj" />
   </ItemGroup>
 

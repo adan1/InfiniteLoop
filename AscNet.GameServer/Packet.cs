@@ -120,9 +120,6 @@ namespace AscNet.GameServer
                 if (attr == null || ReqHandlers.ContainsKey(attr.Name)) 
                     continue;
                 ReqHandlers.Add(attr.Name, (RequestPacketHandlerDelegate)Delegate.CreateDelegate(typeof(RequestPacketHandlerDelegate), method));
-#if DEBUG
-                log.Info($"Loaded {method.Name}");
-#endif
             }
 
             log.Info("Finished loading packet handlers");

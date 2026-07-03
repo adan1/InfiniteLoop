@@ -1,9 +1,8 @@
-﻿using AscNet.Common.Database;
+using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Table.V2.share.chat;
 using AscNet.Table.V2.share.guide;
-using AscNet.Table.V2.share.photomode;
 using MessagePack;
 using System.Diagnostics;
 
@@ -20,6 +19,18 @@ namespace AscNet.GameServer.Handlers
     [MessagePackObject(true)]
     public class ShutdownNotify
     {
+    }
+
+    [MessagePackObject(true)]
+    public class SetServerBeanRequest
+    {
+        public string ServerBean;
+    }
+
+    [MessagePackObject(true)]
+    public class SetServerBeanResponse
+    {
+        public int Code;
     }
     
     [MessagePackObject(true)]
@@ -78,7 +89,10 @@ namespace AscNet.GameServer.Handlers
                 return;
             }
 
-            Session? previousSession = Server.Instance.Sessions.Select(x => x.Value).Where(x => x.GetHashCode() != session.GetHashCode()).FirstOrDefault(x => x.player.PlayerData.Id == player.PlayerData.Id);
+            Session? previousSession = Server.Instance.Sessions
+                .Select(x => x.Value)
+                .Where(x => x.GetHashCode() != session.GetHashCode())
+                .FirstOrDefault(x => x.player is not null && x.player.PlayerData.Id == player.PlayerData.Id);
             if (previousSession is not null)
             {
                 // GateServerForceLogoutByAnotherLogin
@@ -141,12 +155,18 @@ namespace AscNet.GameServer.Handlers
             }, packet.Id);
         }
 
-        /* TODO Reconnection state resumption?
+        [RequestPacketHandler("SetServerBeanRequest")]
+        public static void SetServerBeanRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<SetServerBeanRequest>(packet.Content);
+            session.SendResponse(new SetServerBeanResponse(), packet.Id);
+        }
+
         [RequestPacketHandler("ReconnectAck")]
         public static void ReconnectAckHandler(Session session, Packet.Request packet)
         {
+            // The client uses this as an acknowledgement after ReconnectResponse.
         }
-        */
 
         // TODO: Promo code
         [RequestPacketHandler("UseCdKeyRequest")]
@@ -158,9 +178,22 @@ namespace AscNet.GameServer.Handlers
         // TODO: Move somewhere else, also split.
         static void DoLogin(Session session)
         {
+            long currentTime = DateTimeOffset.Now.ToUnixTimeSeconds();
+            bool isNewDay = currentTime / 86_400 > session.player.PlayerData.LastLoginTime / 86_400;
+            if (isNewDay)
+            {
+                session.player.PlayerData.NewPlayerTaskActiveDay += 1;
+            }
+
+            session.player.PlayerData.LastLoginTime = currentTime;
+            session.player.AddGatherReward(5);
             NotifyLogin notifyLogin = new()
             {
                 PlayerData = session.player.PlayerData,
+                ItemList = session.inventory.Items,
+                CharacterList = session.character.Characters.Select(ToLoginCharacter).ToList(),
+                EquipList = session.character.Equips,
+                HeadPortraitList = session.player.HeadPortraits,
                 TeamGroupData = session.player.TeamGroups,
                 BaseEquipLoginData = new(),
                 FubenData = new()
@@ -168,8 +201,11 @@ namespace AscNet.GameServer.Handlers
                     FubenBaseData = new()
                 },
                 FubenMainLineData = session.player.FubenMainLineData,
+                FubenMainLine2Data = new(),
+                FashionColorData = new(),
                 FubenChapterExtraLoginData = new(),
                 FubenUrgentEventData = new(),
+                FubenShortStoryLoginData = new(),
                 UseBackgroundId = session.player.UseBackgroundId
             };
             if (notifyLogin.PlayerData.DisplayCharIdList.Count < 1)
@@ -238,10 +274,6 @@ namespace AscNet.GameServer.Handlers
                 ItemDataList = session.inventory.Items
             };
 
-            NotifyBackgroundLoginData notifyBackground = new()
-            {
-                HaveBackgroundIds = TableReaderV2.Parse<BackgroundTable>().Select(x => (uint)x.Id).ToList()
-            };
 
             NotifyTaskData notifyTaskData = new()
             {
@@ -250,9 +282,42 @@ namespace AscNet.GameServer.Handlers
                     NewbieHonorReward = false,
                     NewbieUnlockPeriod = 7,
                     Course = session.stage.Course,
+                    FinishedTasks = session.stage.FinishedTasks,
+                    Tasks = TaskModule.BuildStoryTaskData(session),
                 }
             };
+            NotifyGatherRewardList notifyGatherRewardList = new()
+            {
+                GatherRewards = session.player.GatherRewards
+            };
 
+            NotifyBirthdayPlot notifyBirthdayPlot = new()
+            {
+                IsChange = session.player.PlayerData.Birthday is null ? 0 : 1
+            };
+
+            NotifyNewPlayerTaskStatus notifyNewPlayerTaskStatus = new()
+            {
+                NewPlayerTaskActiveDay = session.player.PlayerData.NewPlayerTaskActiveDay
+            };
+            NotifyFubenBossSingleData notifyFubenBossSingleData = new()
+            {
+                FubenBossSingleData = new()
+                {
+                    ActivityNo = 1,
+                    TotalScore = 0,
+                    MaxScore = 0,
+                    OldLevelType = 1,
+                    LevelType = 1,
+                    ChallengeCount = 0,
+                    RemainTime = (uint)(3600 * 24),
+                    AutoFightCount = 0,
+                    RankPlatform = 0,
+                    AfreshId = 0,
+                    ChallengeLevelType = 0,
+                    IsResetOpen = false
+                }
+            };
             session.SendPush(notifyLogin);
             session.SendPush(notifyStageData);
             session.SendPush(notifyCharacterData);
@@ -260,7 +325,6 @@ namespace AscNet.GameServer.Handlers
             session.SendPush(notifyAssistData);
             session.SendPush(notifyChatLoginData);
             session.SendPush(notifyItemDataList);
-            session.SendPush(notifyBackground);
             session.SendPush(new NotifyTRPGData()
             {
                 CurTargetLink = 10001,
@@ -271,6 +335,10 @@ namespace AscNet.GameServer.Handlers
                 BossInfo = new()
             });
             session.SendPush(notifyTaskData);
+            session.SendPush(notifyGatherRewardList);
+            session.SendPush(notifyBirthdayPlot);
+            session.SendPush(notifyNewPlayerTaskStatus);
+            session.SendPush(notifyFubenBossSingleData);
 
             #region DisclamerMail
             NotifyMails notifyMails = new();
@@ -308,23 +376,39 @@ Sorry for the inconvenience.
             session.SendPush(new NotifyMainLineActivity() { EndTime = 0 });
             session.SendPush(new NotifyDailyFubenLoginData() { RefreshTime = (uint)DateTimeOffset.Now.ToUnixTimeSeconds() + 3600 * 24 });
             session.SendPush(new NotifyBriefStoryData());
-            session.SendPush(new NotifyFubenBossSingleData()
-            {
-                FubenBossSingleData = new()
-                {
-                    ActivityNo = 1,
-                    TotalScore = 0,
-                    MaxScore = 0,
-                    OldLevelType = 0,
-                    LevelType = 1,
-                    ChallengeCount = 0,
-                    RemainTime = 100000,
-                    AutoFightCount = 0,
-                    CharacterPoints = new {},
-                    RankPlatform = 0
-                }
-            });
             session.SendPush(new NotifyBfrtData() { BfrtData = new() });
+            session.player.Save();
+        }
+
+        private static LoginCharacterList ToLoginCharacter(CharacterData character)
+        {
+            return new LoginCharacterList
+            {
+                Id = character.Id,
+                Level = character.Level,
+                Exp = character.Exp,
+                Quality = character.Quality,
+                InitQuality = character.InitQuality,
+                Star = character.Star,
+                Grade = character.Grade,
+                SkillList = character.SkillList.Select(skill => new SkillList
+                {
+                    Id = skill.Id,
+                    Level = skill.Level
+                }).ToList(),
+                EnhanceSkillList = character.EnhanceSkillList.Cast<dynamic>().ToList(),
+                FashionId = character.FashionId,
+                CreateTime = character.CreateTime,
+                TrustLv = character.TrustLv,
+                TrustExp = character.TrustExp,
+                Ability = character.Ability,
+                LiberateLv = character.LiberateLv,
+                CharacterHeadInfo = new()
+                {
+                    HeadFashionId = character.CharacterHeadInfo?.HeadFashionId ?? 0,
+                    HeadFashionType = character.CharacterHeadInfo?.HeadFashionType ?? 0
+                }
+            };
         }
     }
 }

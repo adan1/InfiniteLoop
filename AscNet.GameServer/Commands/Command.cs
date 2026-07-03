@@ -145,9 +145,6 @@ namespace AscNet.GameServer.Commands
             {
                 CommandNameAttribute nameAttr = command.GetCustomAttribute<CommandNameAttribute>()!;
                 commands.Add(nameAttr.Name, command);
-#if DEBUG
-                log.Info($"Loaded {nameAttr.Name} command");
-#endif
             }
 
             log.Info("Finished loading commands");

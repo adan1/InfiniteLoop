@@ -1,4 +1,5 @@
 ﻿using MessagePack;
+using Newtonsoft.Json;
 
 namespace AscNet.PcapParser
 {
@@ -41,7 +42,7 @@ namespace AscNet.PcapParser
 
             public object Deserialize()
             {
-                return MessagePackSerializer.Typeless.Deserialize(Content);
+                return DeserializeContent(Content);
             }
         }
 
@@ -64,7 +65,7 @@ namespace AscNet.PcapParser
 
             public object Deserialize()
             {
-                return MessagePackSerializer.Typeless.Deserialize(Content);
+                return DeserializeContent(Content);
             }
         }
 
@@ -84,7 +85,7 @@ namespace AscNet.PcapParser
 
             public object Deserialize()
             {
-                return MessagePackSerializer.Typeless.Deserialize(Content);
+                return DeserializeContent(Content);
             }
         }
 
@@ -99,6 +100,23 @@ namespace AscNet.PcapParser
 
             [Key(2)]
             public string Message;
+        }
+
+        private static object DeserializeContent(byte[] content)
+        {
+            try
+            {
+                string json = MessagePackSerializer.ConvertToJson(content);
+                return JsonConvert.DeserializeObject(json) ?? new { };
+            }
+            catch (System.Exception ex)
+            {
+                return new
+                {
+                    error = ex.Message,
+                    raw = System.Convert.ToBase64String(content)
+                };
+            }
         }
     }
 }

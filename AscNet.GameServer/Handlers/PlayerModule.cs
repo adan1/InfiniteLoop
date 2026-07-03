@@ -1,4 +1,5 @@
 ﻿using AscNet.Common.MsgPack;
+using AscNet.Common.Database;
 using MessagePack;
 
 namespace AscNet.GameServer.Handlers
@@ -44,6 +45,30 @@ namespace AscNet.GameServer.Handlers
     public class ChangePlayerBirthdayResponse
     {
         public int Code;
+    }
+
+    [MessagePackObject(true)]
+    public class ChangePlayerGenderRequest
+    {
+        public int Gender;
+    }
+
+    [MessagePackObject(true)]
+    public class NotifyPlayerGender
+    {
+        public long Gender;
+        public long ChangeGenderTime;
+    }
+
+    [MessagePackObject(true)]
+    public class ChangePlayerGenderResponse
+    {
+        public int Code;
+        public long Gender;
+        public long ChangeGenderTime;
+        public long NextCanChangeTime;
+        public PlayerData PlayerData;
+        public List<RewardGoods> RewardGoodsList = new();
     }
 
     [MessagePackObject(true)]
@@ -155,6 +180,71 @@ namespace AscNet.GameServer.Handlers
     {
         public int Code;
     }
+
+    [MessagePackObject(true)]
+    public class XCustomComponentData
+    {
+        public float PositionX;
+        public float PositionY;
+        public float Scale;
+        public float Alpha;
+        public bool IsActive;
+        public bool IsShowPcTips;
+    }
+
+    [MessagePackObject(true)]
+    public class XKeyPadPanelCustomData
+    {
+        public int SchemeId;
+        public uint Version;
+        public int BallDirection;
+        public bool IsShowFps;
+        public bool IsShowSignal;
+        public bool IsShowQteIcon;
+        public int JoystickType;
+        public float SafeScreenAreaWidth;
+        public float SafeScreenAreaHeight;
+        public Dictionary<int, XCustomComponentData> UiData;
+    }
+
+    [MessagePackObject(true)]
+    public class SyncPlayerKeyPadSettingRequest
+    {
+        public int CurSchemeId;
+        public List<XKeyPadPanelCustomData> PlayerKeyPadSettingList;
+    }
+
+    [MessagePackObject(true)]
+    public class SyncPlayerKeyPadSettingResponse
+    {
+        public int Code;
+    }
+
+    [MessagePackObject(true)]
+    public class RecordPlayerKeyPadSettingRequest
+    {
+        public int CurSchemeId;
+        public XKeyPadPanelCustomData KeyPadCustomData;
+    }
+
+    [MessagePackObject(true)]
+    public class RecordPlayerKeyPadSettingResponse
+    {
+        public int Code;
+    }
+    [MessagePackObject(true)]
+    public class RecordPlayerPointRequest
+    {
+        public int PointId;
+        public int PointType;
+    }
+
+    [MessagePackObject(true)]
+    public class RecordPlayerPointResponse
+    {
+        public int Code;
+    }
+
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
 
@@ -197,10 +287,11 @@ namespace AscNet.GameServer.Handlers
         {
             ChangePlayerNameRequest request = MessagePackSerializer.Deserialize<ChangePlayerNameRequest>(packet.Content);
             session.player.PlayerData.Name = request.Name;
+            session.player.PlayerData.ChangeNameTime = DateTimeOffset.Now.ToUnixTimeSeconds();
 
             NotifyPlayerName notifyPlayerName = new() { Name = session.player.PlayerData.Name };
             session.SendPush(notifyPlayerName);
-            session.SendResponse(new ChangePlayerNameResponse() { NextCanChangeTime = DateTimeOffset.Now.ToUnixTimeSeconds() }, packet.Id);
+            session.SendResponse(new ChangePlayerNameResponse() { NextCanChangeTime = session.player.PlayerData.ChangeNameTime }, packet.Id);
         }
 
         [RequestPacketHandler("ChangePlayerSignRequest")]
@@ -217,8 +308,62 @@ namespace AscNet.GameServer.Handlers
         {
             ChangePlayerBirthdayRequest request = MessagePackSerializer.Deserialize<ChangePlayerBirthdayRequest>(packet.Content);
             session.player.PlayerData.Birthday = request;
+            session.SendPush(new NotifyBirthdayPlot() { IsChange = 1 });
 
             session.SendResponse(new ChangePlayerBirthdayResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("ChangePlayerGenderRequest")]
+        public static void ChangePlayerGenderRequestHandler(Session session, Packet.Request packet)
+        {
+            ChangePlayerGenderRequest request = MessagePackSerializer.Deserialize<ChangePlayerGenderRequest>(packet.Content);
+            if (request.Gender is < 1 or > 3)
+            {
+                // PlayerGenderCfgNotExist
+                session.SendResponse(new ChangePlayerGenderResponse() { Code = 20002020 }, packet.Id);
+                return;
+            }
+
+            bool isFirstGenderSetup = session.player.PlayerData.Gender <= 0 || session.player.PlayerData.ChangeGenderTime <= 0;
+            if (!isFirstGenderSetup && session.player.PlayerData.Gender == request.Gender)
+            {
+                // PlayerGenderIsSame
+                session.SendResponse(new ChangePlayerGenderResponse() { Code = 20002021 }, packet.Id);
+                return;
+            }
+
+            ChangePlayerGenderResponse response = new();
+            session.player.PlayerData.Gender = request.Gender;
+            session.player.PlayerData.ChangeGenderTime = DateTimeOffset.Now.ToUnixTimeSeconds();
+            response.Gender = session.player.PlayerData.Gender;
+            response.ChangeGenderTime = session.player.PlayerData.ChangeGenderTime;
+            response.NextCanChangeTime = session.player.PlayerData.ChangeGenderTime;
+            response.PlayerData = session.player.PlayerData;
+
+            if (isFirstGenderSetup)
+            {
+                Item rewardItem = session.inventory.Do(Inventory.FreeGem, 50);
+                session.SendPush(new NotifyItemDataList()
+                {
+                    ItemDataList = { rewardItem }
+                });
+                response.RewardGoodsList.Add(new RewardGoods()
+                {
+                    RewardType = (int)RewardType.Item,
+                    TemplateId = Inventory.FreeGem,
+                    Count = 50
+                });
+                session.inventory.Save();
+            }
+
+            session.SendPush(new NotifyPlayerGender()
+            {
+                Gender = session.player.PlayerData.Gender,
+                ChangeGenderTime = session.player.PlayerData.ChangeGenderTime
+            });
+
+            session.player.Save();
+            session.SendResponse(response, packet.Id);
         }
 
         [RequestPacketHandler("UpdatePlayerDisplayCharIdRequest")]
@@ -273,6 +418,27 @@ namespace AscNet.GameServer.Handlers
         public static void SetAppearanceRequestHandler(Session session, Packet.Request packet)
         {
             session.SendResponse(new SetAppearanceResponse() { Code = 1 }, packet.Id);
+        }
+
+        [RequestPacketHandler("RecordPlayerPointRequest")]
+        public static void RecordPlayerPointRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<RecordPlayerPointRequest>(packet.Content);
+            session.SendResponse(new RecordPlayerPointResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("SyncPlayerKeyPadSettingRequest")]
+        public static void SyncPlayerKeyPadSettingRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<SyncPlayerKeyPadSettingRequest>(packet.Content);
+            session.SendResponse(new SyncPlayerKeyPadSettingResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("RecordPlayerKeyPadSettingRequest")]
+        public static void RecordPlayerKeyPadSettingRequestHandler(Session session, Packet.Request packet)
+        {
+            _ = MessagePackSerializer.Deserialize<RecordPlayerKeyPadSettingRequest>(packet.Content);
+            session.SendResponse(new RecordPlayerKeyPadSettingResponse(), packet.Id);
         }
     }
 }

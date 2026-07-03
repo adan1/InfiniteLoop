@@ -16,9 +16,6 @@
         private ThreadSafeStreamWriter()
         {
             _writer = new StreamWriter(_logFilePath, true);
-#if !RELEASE
-            _writer.AutoFlush = true;
-#endif
         }
 
         public static ThreadSafeStreamWriter Instance

@@ -112,21 +112,24 @@ namespace AscNet.GameServer
                                         {
                                             // TODO: with new logger this will be unnecessary
                                             if (Common.Common.config.VerboseLevel > VerboseLevel.Silent)
-                                                log.Info($"{request.Name}{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + JsonConvert.SerializeObject(MessagePackSerializer.Typeless.Deserialize(request.Content))) : "")}");
+                                                log.Info($"{request.Name}{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + FormatMessagePackContent(request.Content)) : "")}");
                                             requestPacketHandler.Invoke(this, request);
                                         }
                                         else
                                         {
                                             if (Common.Common.config.VerboseLevel > VerboseLevel.Silent)
-                                                log.Warn($"{request.Name} handler not found!{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + JsonConvert.SerializeObject(MessagePackSerializer.Typeless.Deserialize(request.Content))) : "")}");
+                                                log.Warn($"{request.Name} handler not found!{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + FormatMessagePackContent(request.Content)) : "")}");
                                         }
                                         break;
 
                                     case Packet.ContentType.Push:
                                         Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
                                         debugContent = push.Content;
-                                        log.Info(push.Name);
-                                        throw new NotImplementedException($"Packet push handlers not implemented ({push.Name})");
+                                        if (IsKnownClientPush(push.Name))
+                                            log.Info(push.Name);
+                                        else
+                                            log.Warn($"{push.Name} client push ignored!{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + FormatMessagePackContent(push.Content)) : "")}");
+                                        break;
 
                                     case Packet.ContentType.Exception:
                                         Packet.Exception exception = MessagePackSerializer.Deserialize<Packet.Exception>(packet.Content);
@@ -159,6 +162,15 @@ namespace AscNet.GameServer
             DisconnectProtocol();
         }
 
+        public static bool IsKnownClientPush(string name)
+        {
+            return name switch
+            {
+                "BoardMutualRequest" => true,
+                _ => false
+            };
+        }
+
         public void SendPush<T>(T push) where T : new()
         {
             Packet.Push packet = new()
@@ -188,7 +200,7 @@ namespace AscNet.GameServer
                 Type = Packet.ContentType.Push,
                 Content = MessagePackSerializer.Serialize(packet)
             });
-            log.Info($"{name}{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + JsonConvert.SerializeObject(MessagePackSerializer.Typeless.Deserialize(push))) : "")}");
+            log.Info($"{name}{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + FormatMessagePackContent(push)) : "")}");
         }
 
         public void SendResponse<T>(T response, int clientSeq = 0) where T : new()
@@ -219,6 +231,22 @@ namespace AscNet.GameServer
             Array.Copy(serializedPacket, 0, sendBytes, 4, serializedPacket.Length);
 
             client.GetStream().Write(sendBytes);
+        }
+
+        private static string FormatMessagePackContent(byte[] content)
+        {
+            try
+            {
+                return MessagePackSerializer.ConvertToJson(content);
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    error = ex.Message,
+                    raw = Convert.ToBase64String(content)
+                });
+            }
         }
 
         public void DisconnectProtocol()

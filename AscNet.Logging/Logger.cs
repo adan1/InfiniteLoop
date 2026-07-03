@@ -165,18 +165,25 @@
         {
             if (logLevel <= _logLevel)
             {
-                Console.ForegroundColor = LogLevelColor[logLevel];
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}][{logLevel}]{message}");
-                Console.ResetColor();
+                if (Console.IsOutputRedirected)
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}][{logLevel}]{message}");
+                }
+                else
+                {
+                    Console.ForegroundColor = LogLevelColor[logLevel];
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}][{logLevel}]{message}");
+                    Console.ResetColor();
+                }
             }
         }
 
+        public static bool EnableFileLogging { get; set; } = Environment.GetEnvironmentVariable("ASCNET_FILE_LOG") == "1";
+
         private void AppendToFile(string message, LogLevel logLevel)
         {
-            if (logLevel <= _fileLogLevel)
-            {
+            if (EnableFileLogging && logLevel <= _fileLogLevel)
                 ThreadSafeStreamWriter.Instance.AppendLine($"[{DateTime.Now:dd.MM.yyyy HH:mm:ss.fff}][{_loggerType.Namespace}][{_loggerName}][{logLevel}]{message}");
-            }
         }
 
         #endregion
