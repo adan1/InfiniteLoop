@@ -403,7 +403,7 @@ namespace AscNet.GameServer.Handlers
                 FubenMainLineData = session.player.FubenMainLineData,
                 FubenEventData = new(),
                 FubenMainLine2Data = new(),
-                FubenMainLineLuosaitaData = new(),
+                FubenMainLineLuosaitaData = MainLineLuosaitaPayloadFactory.BuildLoginData(),
                 FashionColorData = new(),
                 FubenChapterExtraLoginData = new(),
                 FubenUrgentEventData = new(),
@@ -483,9 +483,6 @@ namespace AscNet.GameServer.Handlers
             foreach (long stageId in DefaultPassedMainStoryStageIds)
                 EnsureLoginPassedStage(session, stageData, stageId, ref changed);
 
-            string defaultMainStorySummary = string.Join(",", DefaultPassedMainStoryStageIds.Select(stageId =>
-                stageData.TryGetValue(stageId, out StageDatum? stage) && stage.Passed ? $"{stageId}:passed" : $"{stageId}:missing"));
-            session.log.Info($"[AWAKEN-PROBE] BuildLoginStageData uid={session.player?.PlayerData.Id.ToString() ?? "<null>"} changed={changed} homeChatPresent={stageData.ContainsKey(HomeChatUnlockStageId)} defaultMainStory={defaultMainStorySummary}");
 
             if (changed)
                 session.stage?.Save();
@@ -1162,7 +1159,6 @@ Sorry for the inconvenience.
                 return;
 
             session.character.Save();
-            session.log.Info($"[AWAKEN-PROBE] RepairClaimedGatherFashionRewards uid={session.player.PlayerData.Id} repaired=True claimedGatherRewards={session.player.GatherRewards.Count}");
         }
 
 

@@ -18,6 +18,7 @@ using AscNet.Table.V2.share.character.enhanceskill;
 using AscNet.Table.V2.share.equip;
 using AscNet.Table.V2.share.item;
 using AscNet.Table.V2.share.fashion;
+using AscNet.Table.V2.share.robot;
 using AscNet.Table.V2.client.draw;
 using MessagePack;
 using Newtonsoft.Json;
@@ -72,6 +73,12 @@ namespace AscNet.Test
                 if (args.Contains("--mainline2-exhibition-compat-only"))
                 {
                     ValidateMainLine2UpdateExhibitionChapterCompatibility();
+                    return;
+                }
+
+                if (args.Contains("--mainline-luosaita-enter-compat-only"))
+                {
+                    ValidateMainLineLuosaitaEnterCompatibility();
                     return;
                 }
 
@@ -150,6 +157,12 @@ namespace AscNet.Test
                 if (args.Contains("--story-course-reward-compat-only"))
                 {
                     ValidateStoryCourseRewardCompatibility();
+                    return;
+                }
+
+                if (args.Contains("--story-deploy-version-gap-compat-only"))
+                {
+                    ValidateStoryDeployVersionGapCompatibility();
                     return;
                 }
 
@@ -250,6 +263,7 @@ namespace AscNet.Test
                 ValidateSessionClientLoopFramingCompatibility();
                 ValidateStageBookmarkCompatibilityShape();
                 ValidateMainLine2UpdateExhibitionChapterCompatibility();
+                ValidateMainLineLuosaitaEnterCompatibility();
                 ValidateMainLineTreasureRewardCompatibility();
                 ValidateGatherAwakenRewardCompatibility();
                 ValidateBossSingleLoginCompatibilityShape();
@@ -263,6 +277,7 @@ namespace AscNet.Test
                 ValidateCharacterEnhanceSkillTableBackedCompatibility();
                 ValidateExpLevelCompatibility();
                 ValidateStoryCourseRewardCompatibility();
+                ValidateStoryDeployVersionGapCompatibility();
                 ValidatePr2QualityCompatibility();
                 ValidateInventoryEquipCompatibility();
                 ValidateDrawCompatibility();
@@ -6669,6 +6684,17 @@ namespace AscNet.Test
                 ]);
             }
 
+            public static MongoCollectionOverride InstallForStoryDeployVersionGapCompatibility()
+            {
+                return new MongoCollectionOverride(
+                [
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Inventory)), CreateNoOpMongoCollection<AscNet.Common.Database.Inventory>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Character)), CreateNoOpMongoCollection<AscNet.Common.Database.Character>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Player)), CreateNoOpMongoCollection<AscNet.Common.Database.Player>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Stage)), CreateNoOpMongoCollection<AscNet.Common.Database.Stage>())
+                ]);
+            }
+
             public void Dispose()
             {
                 foreach ((FieldInfo field, object? value) in originalValues)
@@ -7149,6 +7175,98 @@ namespace AscNet.Test
 
             AssertEqual(0, roundTrip.Code, "MainLine2UpdateExhibitionChapterResponse Code");
             ValidateRequestHandlerRegistration("MainLine2UpdateExhibitionChapterRequest");
+        }
+
+        private static void ValidateMainLineLuosaitaEnterCompatibility()
+        {
+            MainLineLuosaitaEnterRequest request = new()
+            {
+                SectionId = 1
+            };
+            MainLineLuosaitaEnterRequest requestRoundTrip = MessagePackSerializer.Deserialize<MainLineLuosaitaEnterRequest>(
+                MessagePackSerializer.Serialize(request));
+            AssertEqual(1, requestRoundTrip.SectionId, "MainLineLuosaitaEnterRequest SectionId");
+
+            MainLineLuosaitaSectionInfo initialSection = MainLineLuosaitaPayloadFactory.BuildCapturedSectionInfo();
+            MainLineLuosaitaEnterResponse response = new()
+            {
+                Code = 0,
+                SectionInfo = initialSection
+            };
+            MainLineLuosaitaEnterResponse roundTrip = MessagePackSerializer.Deserialize<MainLineLuosaitaEnterResponse>(
+                MessagePackSerializer.Serialize(response));
+
+            AssertEqual(0, roundTrip.Code, "MainLineLuosaitaEnterResponse Code");
+            AssertLuosaitaInitialSection(roundTrip.SectionInfo, "MainLineLuosaitaEnterResponse SectionInfo");
+
+            FubenMainLineLuosaitaData loginData = MessagePackSerializer.Deserialize<FubenMainLineLuosaitaData>(
+                MessagePackSerializer.Serialize(MainLineLuosaitaPayloadFactory.BuildLoginData()));
+            AssertEqual(29, loginData.IncId, "FubenMainLineLuosaitaData IncId captured login payload");
+            AssertEqual(1, loginData.SectionInfos.Count, "FubenMainLineLuosaitaData SectionInfos captured login payload count");
+            AssertLuosaitaInitialSection(loginData.SectionInfos[0], "FubenMainLineLuosaitaData SectionInfos[0] captured login payload");
+            AssertEqual(3, loginData.KillEnemySet.Count, "FubenMainLineLuosaitaData KillEnemySet captured login payload count");
+            AssertEqual(201, loginData.KillEnemySet[0], "FubenMainLineLuosaitaData KillEnemySet[0]");
+            AssertEqual(202, loginData.KillEnemySet[1], "FubenMainLineLuosaitaData KillEnemySet[1]");
+            AssertEqual(203, loginData.KillEnemySet[2], "FubenMainLineLuosaitaData KillEnemySet[2]");
+
+            const long playerId = 78_001;
+            const int packetId = 78_101;
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                "mainline-luosaita-enter-compat-test");
+            InvokeRegisteredRequestHandler(nameof(MainLineLuosaitaEnterRequest), harness.Session, packetId, requestRoundTrip);
+            MainLineLuosaitaEnterResponse handlerResponse = ReadResponsePayload<MainLineLuosaitaEnterResponse>(
+                harness,
+                packetId,
+                nameof(MainLineLuosaitaEnterResponse),
+                "MainLineLuosaitaEnterRequest response");
+            AssertEqual(0, handlerResponse.Code, "MainLineLuosaitaEnterRequest handler response Code");
+            AssertLuosaitaInitialSection(handlerResponse.SectionInfo, "MainLineLuosaitaEnterRequest handler response SectionInfo");
+
+            ValidateRequestHandlerRegistration("MainLineLuosaitaEnterRequest");
+
+            static void AssertLuosaitaInitialSection(MainLineLuosaitaSectionInfo? sectionInfo, string name)
+            {
+                if (sectionInfo is null)
+                    throw new InvalidDataException($"{name}: expected captured SectionInfo payload, got nil.");
+
+                AssertEqual(1, sectionInfo.SectionId, $"{name}.SectionId");
+                AssertEqual(10, sectionInfo.BlockInfos.Count, $"{name}.BlockInfos count");
+                AssertEqual(101, sectionInfo.BlockInfos[0].Id, $"{name}.BlockInfos[0].Id");
+                AssertEqual(1, sectionInfo.BlockInfos[0].BlockStatus, $"{name}.BlockInfos[0].BlockStatus");
+                AssertEqual(110, sectionInfo.BlockInfos[9].Id, $"{name}.BlockInfos[9].Id");
+                AssertEqual(0, sectionInfo.BlockInfos[9].BlockStatus, $"{name}.BlockInfos[9].BlockStatus");
+
+                AssertEqual(11, sectionInfo.SectionMembers.Count, $"{name}.SectionMembers count");
+                MainLineLuosaitaSectionMember army = sectionInfo.SectionMembers.Single(member => member.Guid == 1);
+                AssertEqual(1, army.Type, $"{name}.SectionMembers army Type");
+                AssertEqual(104, army.BlockId, $"{name}.SectionMembers army BlockId");
+                AssertEqual(4, army.PosId, $"{name}.SectionMembers army PosId");
+                if (army.ArmyInfo is null)
+                    throw new InvalidDataException($"{name}.SectionMembers army ArmyInfo: expected captured unit payload, got nil.");
+                AssertEqual(101, army.ArmyInfo.Id, $"{name}.SectionMembers army ArmyInfo.Id");
+                AssertEqual(8, army.ArmyInfo.CurHp, $"{name}.SectionMembers army ArmyInfo.CurHp");
+
+                MainLineLuosaitaSectionMember stage = sectionInfo.SectionMembers.Single(member => member.Guid == 9);
+                AssertEqual(4, stage.Type, $"{name}.SectionMembers stage Type");
+                AssertEqual(10380101, stage.StageId, $"{name}.SectionMembers stage StageId");
+
+                MainLineLuosaitaSectionMember enemy = sectionInfo.SectionMembers.Single(member => member.Guid == 27);
+                if (enemy.EnemyInfo is null)
+                    throw new InvalidDataException($"{name}.SectionMembers enemy EnemyInfo: expected captured unit payload, got nil.");
+                AssertEqual(240, enemy.EnemyInfo.Id, $"{name}.SectionMembers enemy EnemyInfo.Id");
+                AssertEqual(99, enemy.EnemyInfo.CurHp, $"{name}.SectionMembers enemy EnemyInfo.CurHp");
+
+                MainLineLuosaitaSectionMember character = sectionInfo.SectionMembers.Single(member => member.Guid == 29);
+                AssertEqual(3, character.Type, $"{name}.SectionMembers character Type");
+                AssertEqual(3101, character.CharacterId, $"{name}.SectionMembers character CharacterId");
+
+                AssertEqual(0, sectionInfo.DocList.Count, $"{name}.DocList count");
+                AssertEqual(0, sectionInfo.CharacterMoveIds.Count, $"{name}.CharacterMoveIds count");
+                AssertEqual(0, sectionInfo.SectionStatus, $"{name}.SectionStatus");
+            }
         }
 
         private static void ValidateMainLineTreasureRewardCompatibility()
@@ -8485,6 +8603,773 @@ namespace AscNet.Test
             MethodInfo fightSettleHandler = GetRegisteredRequestHandlerMethod("FightSettleRequest");
             AssertEqual("FightSettleRequestHandler", fightSettleHandler.Name, "FightSettleRequest registered handler method");
             AssertMethodDoesNotTransitivelyCall(fightSettleHandler, stageAddCourse, "FightSettleRequestHandler course claim marker");
+        }
+
+        private static void ValidateStoryDeployVersionGapCompatibility()
+        {
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForStoryDeployVersionGapCompatibility();
+            const uint retailRebootStageId = 10_400_101;
+            const int retailRebootStageRobotId = 172_410;
+            const uint retailRebootStageRobotCharacterId = 1_021_007;
+            const uint retailMainLine2StageId = 15_020_121;
+            const int retailMainLine2StageRobotId = 9_108;
+            const long playerId = 88_010;
+            const int localCharacterId = 1_021_001;
+            const int preFightPacketId = 13_014;
+            const int fightSettlePacketId = 13_015;
+            const int enterStoryPacketId = 13_016;
+            const int mainLine2ChapterPacketId = 13_017;
+
+            StageTable retailRebootStage = AssertRetailStageTableProgressionCompatibility(
+                retailRebootStageId,
+                expectedRebootId: 17,
+                expectedPassTimeLimit: 300,
+                expectedRobotId: retailRebootStageRobotId);
+            RobotTable requestedRobot = AssertStoryDeployRobotCharacterTableCompatibility(retailRebootStageRobotId, retailRebootStageRobotCharacterId);
+            AssertRetailCapturedStageDeployPath(
+                (uint)retailRebootStage.StageId,
+                retailRebootStageRobotId,
+                requestedRobot,
+                expectedRebootId: 17,
+                expectedPassTimeLimit: 300,
+                playerId,
+                preFightPacketId,
+                fightSettlePacketId);
+
+            AssertRetailStageTableProgressionCompatibility(
+                retailMainLine2StageId,
+                expectedRebootId: 16,
+                expectedPassTimeLimit: 300,
+                expectedRobotId: retailMainLine2StageRobotId);
+            AssertRetailStageLevelControlMonsterLevels(retailMainLine2StageId, [300, 300, 300]);
+            AssertMainLine2GeneratedTableCoverage(retailRebootStageId, [18, 54, 61]);
+            AssertMainlineChapterStageReferencesBackedByStageRows([1024, 1025, 1026, 1027, 1028, 1029]);
+            AssertRetailFirstClearSettleRewards(
+                retailMainLine2StageId,
+                playerId + 2,
+                localCharacterId,
+                preFightPacketId,
+                fightSettlePacketId);
+
+            IReadOnlyList<uint> capturedVersionGapStageIds = CapturedMainLine2MissingStageIds();
+            AssertCapturedMainLine2VersionGapStagesBackedByLocalStageTable(capturedVersionGapStageIds);
+            AssertCapturedMainLine2ChapterUpdates(playerId, [18, 61, 54], mainLine2ChapterPacketId);
+
+            AscNet.Common.Database.Player player = CreateStoryDeployVersionGapPlayer(playerId, localCharacterId);
+            AscNet.Common.Database.Character character = CreateStoryDeployVersionGapCharacter(playerId, localCharacterId);
+            AscNet.Common.Database.Stage fightStage = CreateLoginAccountCompatibilityStage(playerId);
+            using LoopbackSessionHarness fightHarness = new(
+                character,
+                player,
+                CreateDrawCompatibilityInventory(playerId, []),
+                "story-deploy-version-gap-mainline2-fight-test");
+            fightHarness.Session.stage = fightStage;
+
+            foreach (uint stageId in capturedVersionGapStageIds)
+            {
+                AssertCapturedMainLine2StageFightPathPlayable(
+                    fightHarness,
+                    fightStage,
+                    playerId,
+                    localCharacterId,
+                    stageId,
+                    preFightPacketId,
+                    fightSettlePacketId);
+            }
+
+            AscNet.Common.Database.Stage enterStoryStage = CreateLoginAccountCompatibilityStage(playerId + 1);
+            using LoopbackSessionHarness enterStoryHarness = new(
+                CreateStoryDeployVersionGapCharacter(playerId + 1, localCharacterId),
+                CreateStoryDeployVersionGapPlayer(playerId + 1, localCharacterId),
+                CreateDrawCompatibilityInventory(playerId + 1, []),
+                "story-deploy-version-gap-mainline2-enter-story-test");
+            enterStoryHarness.Session.stage = enterStoryStage;
+
+            foreach (uint stageId in capturedVersionGapStageIds)
+            {
+                AssertCapturedMainLine2StageEnterStoryPlayable(
+                    enterStoryHarness,
+                    enterStoryStage,
+                    stageId,
+                    enterStoryPacketId);
+            }
+        }
+
+        private static IReadOnlyList<uint> CapturedMainLine2MissingStageIds()
+        {
+            return
+            [
+                10_310_102, 10_310_105, 10_310_109, 10_310_112, 10_310_116, 10_310_119,
+                10_310_122, 10_310_125, 10_310_126, 10_310_127, 10_310_212, 10_310_216,
+                10_310_316, 10_320_102, 10_320_107, 10_320_109, 10_320_111, 10_320_116,
+                10_320_119, 10_320_122, 10_320_216, 10_320_316, 10_320_416, 10_330_102,
+                10_330_105, 10_330_108, 10_330_113, 10_330_116, 10_330_119, 10_330_122,
+                10_330_127, 10_330_130, 10_330_213, 10_330_308, 10_340_101, 10_340_105,
+                10_340_111, 10_340_116, 10_340_117, 10_350_101, 10_350_111, 10_350_114,
+                10_350_115, 10_350_122, 10_350_125, 10_350_130, 10_350_132, 10_350_135,
+                10_350_136, 10_350_230, 15_020_899, 15_020_902, 15_021_500,
+                15_021_501, 15_021_502
+            ];
+        }
+
+        private static StageTable AssertRetailStageTableProgressionCompatibility(
+            uint stageId,
+            int expectedRebootId,
+            int expectedPassTimeLimit,
+            int expectedRobotId)
+        {
+            StageTable stage = TableReaderV2.Parse<StageTable>().SingleOrDefault(stage => (uint)stage.StageId == stageId)
+                ?? throw new InvalidDataException($"Stage.tsv retail captured stage {stageId}: missing row.");
+            AssertEqual(expectedRebootId, stage.RebootId ?? 0, $"Stage.tsv retail captured stage {stageId} RebootId");
+            AssertEqual(expectedPassTimeLimit, stage.PassTimeLimit ?? 0, $"Stage.tsv retail captured stage {stageId} PassTimeLimit");
+            if (!stage.RobotId.Contains(expectedRobotId))
+                throw new InvalidDataException($"Stage.tsv retail captured stage {stageId} RobotId: missing robot {expectedRobotId}.");
+            return stage;
+        }
+
+        private static void AssertRetailStageLevelControlMonsterLevels(uint stageId, IReadOnlyList<long> expectedMonsterLevels)
+        {
+            List<StageLevelControlTable> levelControls = TableReaderV2.Parse<StageLevelControlTable>()
+                .Where(levelControl => (uint)levelControl.StageId == stageId)
+                .ToList();
+            if (levelControls.Count == 0)
+                throw new InvalidDataException($"StageLevelControl.tsv retail captured stage {stageId}: missing rows.");
+
+            foreach (StageLevelControlTable levelControl in levelControls)
+            {
+                AssertIntegerList(
+                    expectedMonsterLevels,
+                    levelControl.MonsterLevel.Select(level => (long)level).ToArray(),
+                    $"StageLevelControl.tsv retail captured stage {stageId} row {levelControl.Id} MonsterLevel");
+            }
+        }
+
+        private static void AssertMainlineChapterStageReferencesBackedByStageRows(IReadOnlyList<int> chapterIds)
+        {
+            HashSet<int> stageIds = TableReaderV2.Parse<StageTable>()
+                .Select(stage => stage.StageId)
+                .ToHashSet();
+            Dictionary<int, ChapterTable> chaptersById = TableReaderV2.Parse<ChapterTable>()
+                .GroupBy(chapter => chapter.ChapterId)
+                .ToDictionary(group => group.Key, group => group.First());
+
+            foreach (int chapterId in chapterIds)
+            {
+                if (!chaptersById.TryGetValue(chapterId, out ChapterTable? chapter))
+                    throw new InvalidDataException($"Chapter.tsv row {chapterId}: missing chapter row.");
+
+                List<int> referencedStageIds = chapter.StageId
+                    .Where(stageId => stageId > 0)
+                    .ToList();
+                if (referencedStageIds.Count == 0)
+                    throw new InvalidDataException($"Chapter.tsv row {chapterId}: expected at least one stage reference.");
+
+                foreach (int stageId in referencedStageIds)
+                {
+                    if (!stageIds.Contains(stageId))
+                        throw new InvalidDataException($"Chapter.tsv row {chapterId}: StageId {stageId} is missing from Stage.tsv.");
+                }
+            }
+        }
+
+        private static void AssertMainLine2GeneratedTableCoverage(uint expectedStageId, IReadOnlyList<int> expectedChapterIds)
+        {
+            Type[] mainLine2TableTypes = typeof(StageTable).Assembly.GetTypes()
+                .Where(type => type.Namespace == "AscNet.Table.V2.share.fuben.mainline2"
+                    && typeof(ITable).IsAssignableFrom(type)
+                    && !type.IsAbstract)
+                .ToArray();
+            if (mainLine2TableTypes.Length == 0)
+                return;
+
+            Type[] chapterLikeTypes = mainLine2TableTypes
+                .Where(type => type.Name.Contains("Chapter", StringComparison.Ordinal)
+                    || OptionalDataMember(type, "ChapterId") is not null)
+                .ToArray();
+            if (chapterLikeTypes.Length == 0)
+                throw new InvalidDataException("MainLine2 generated tables: expected chapter or exhibition chapter table classes.");
+
+            HashSet<int> actualChapterIds = new();
+            foreach (Type chapterType in chapterLikeTypes)
+            {
+                foreach (object row in ParseTableRows(chapterType, $"MainLine2 {chapterType.Name}"))
+                {
+                    if (TryGetFirstIntegerMember(row, ["ChapterId", "Id"], out int chapterId))
+                        actualChapterIds.Add(chapterId);
+                }
+            }
+
+            foreach (int expectedChapterId in expectedChapterIds)
+            {
+                if (!actualChapterIds.Contains(expectedChapterId))
+                    throw new InvalidDataException($"MainLine2 chapter/exhibition generated tables: missing id {expectedChapterId}.");
+            }
+
+            Type[] stageLikeTypes = mainLine2TableTypes
+                .Where(type => type.Name.Contains("Stage", StringComparison.Ordinal)
+                    && (OptionalDataMember(type, "StageId") is not null
+                        || OptionalDataMember(type, "Id") is not null
+                        || OptionalDataMember(type, "StageIds") is not null))
+                .OrderByDescending(type => string.Equals(type.Name, "MainLine2StageTable", StringComparison.Ordinal))
+                .ThenBy(type => type.Name, StringComparer.Ordinal)
+                .ToArray();
+            if (stageLikeTypes.Length == 0)
+                throw new InvalidDataException("MainLine2 generated tables: expected a stage table class.");
+
+            bool hasExpectedStage = stageLikeTypes
+                .SelectMany(type => ParseTableRows(type, $"MainLine2 {type.Name}"))
+                .Any(row => MainLine2RowContainsStageId(row, expectedStageId));
+            if (!hasExpectedStage)
+                throw new InvalidDataException($"MainLine2 generated stage tables: missing stage {expectedStageId}.");
+        }
+
+        private static bool MainLine2RowContainsStageId(object row, uint expectedStageId)
+        {
+            if (TryGetFirstIntegerMember(row, ["StageId"], out int stageId)
+                && (uint)stageId == expectedStageId)
+                return true;
+
+            if (string.Equals(row.GetType().Name, "MainLine2StageTable", StringComparison.Ordinal)
+                && TryGetFirstIntegerMember(row, ["Id"], out int id)
+                && (uint)id == expectedStageId)
+                return true;
+
+            MemberInfo? stageIdsMember = OptionalDataMember(row.GetType(), "StageIds");
+            if (stageIdsMember is null)
+                return false;
+
+            object? stageIds = GetRequiredMemberValue(row, stageIdsMember);
+            return stageIds is not null
+                && ReadIntegerList(stageIds, $"{row.GetType().FullName}.StageIds")
+                    .Any(value => (uint)value == expectedStageId);
+        }
+
+        private static List<object> ParseTableRows(Type tableType, string name)
+        {
+            object? rows = RequiredGenericMethodDefinition(
+                    typeof(TableReaderV2),
+                    nameof(TableReaderV2.Parse),
+                    BindingFlags.Public | BindingFlags.Static,
+                    parameterCount: 0)
+                .MakeGenericMethod(tableType)
+                .Invoke(null, null);
+            if (rows is not System.Collections.IEnumerable enumerable || rows is string)
+                throw new InvalidDataException($"{name}: expected TableReaderV2.Parse rows.");
+
+            List<object> result = new();
+            foreach (object? row in enumerable)
+            {
+                if (row is null)
+                    throw new InvalidDataException($"{name}: expected non-nil table row.");
+                result.Add(row);
+            }
+            return result;
+        }
+
+        private static bool TryGetFirstIntegerMember(object target, IReadOnlyList<string> memberNames, out int value)
+        {
+            foreach (string memberName in memberNames)
+            {
+                MemberInfo? member = OptionalDataMember(target.GetType(), memberName);
+                if (member is null)
+                    continue;
+
+                object? rawValue = GetRequiredMemberValue(target, member);
+                if (rawValue is null)
+                    continue;
+
+                value = Convert.ToInt32(rawValue);
+                return true;
+            }
+
+            value = 0;
+            return false;
+        }
+
+        private static void AssertRetailFirstClearSettleRewards(
+            uint stageId,
+            long playerId,
+            int localCharacterId,
+            int preFightPacketId,
+            int fightSettlePacketId)
+        {
+            AscNet.Common.Database.Stage stage = CreateLoginAccountCompatibilityStage(playerId);
+            using LoopbackSessionHarness harness = new(
+                CreateStoryDeployVersionGapCharacter(playerId, localCharacterId),
+                CreateStoryDeployVersionGapPlayer(playerId, localCharacterId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                "story-deploy-version-gap-mainline2-first-clear-settle-test");
+            harness.Session.stage = stage;
+
+            PreFightRequest preFightRequest = new()
+            {
+                PreFightData = new()
+                {
+                    ChallengeCount = 1,
+                    StageId = stageId,
+                    CardIds = [unchecked((uint)localCharacterId)],
+                    RobotIds = [],
+                    FirstFightPos = 1,
+                    CaptainPos = 1,
+                    IsHasAssist = false
+                }
+            };
+
+            InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, preFightPacketId, preFightRequest);
+            PreFightResponse preFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness,
+                preFightPacketId,
+                nameof(PreFightResponse),
+                $"PreFightRequest retail captured stage {stageId} first-clear settle response");
+            AssertEqual(0, preFightResponse.Code, $"PreFightResponse retail captured stage {stageId} first-clear settle Code");
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"PreFightResponse retail captured stage {stageId} first-clear settle: expected FightData.");
+
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                fightSettlePacketId,
+                CreateMissingStageSettleRequest(stageId, preFightResponse.FightData.FightId, playerId));
+            (NotifyStageData stagePush, FightSettleResponse settleResponse) = ReadUnknownStageSettleResult(
+                harness,
+                fightSettlePacketId);
+            AssertRetailFirstClearSettleResponse(settleResponse, stageId);
+            AssertMissingStagePushAndPersistence(stagePush, stage, stageId, $"retail captured stage {stageId} first-clear settle");
+        }
+
+        private static void AssertRetailFirstClearSettleResponse(FightSettleResponse settleResponse, uint stageId)
+        {
+            AssertEqual(0, settleResponse.Code, $"FightSettleResponse retail captured stage {stageId} first-clear Code");
+            if (settleResponse.Settle is null)
+                throw new InvalidDataException($"FightSettleResponse retail captured stage {stageId} first-clear: expected Settle payload.");
+            AssertEqual(stageId, (uint)settleResponse.Settle.StageId, $"FightSettleResponse retail captured stage {stageId} first-clear Settle.StageId");
+            AssertEqual(1, settleResponse.Settle.ChallengeCount, $"FightSettleResponse retail captured stage {stageId} first-clear ChallengeCount");
+            AssertRetailFirstClearRewardGoods(settleResponse.Settle.RewardGoodsList, $"FightSettleResponse retail captured stage {stageId} first-clear RewardGoodsList");
+            AssertEqual(1, settleResponse.Settle.MultiRewardGoodsList.Count, $"FightSettleResponse retail captured stage {stageId} first-clear MultiRewardGoodsList count");
+            AssertRetailFirstClearRewardGoods(settleResponse.Settle.MultiRewardGoodsList[0], $"FightSettleResponse retail captured stage {stageId} first-clear MultiRewardGoodsList[0]");
+        }
+
+        private static void AssertRetailFirstClearRewardGoods(IReadOnlyList<RewardGoods> actualRewards, string name)
+        {
+            (int TemplateId, int Count)[] expectedRewards =
+            [
+                (3, 30),
+                (31_204, 1),
+                (30_013, 1),
+                (1, 10_000)
+            ];
+
+            AssertEqual(expectedRewards.Length, actualRewards.Count, $"{name} count");
+            for (int index = 0; index < expectedRewards.Length; index++)
+            {
+                AssertEqual(expectedRewards[index].TemplateId, actualRewards[index].TemplateId, $"{name}[{index}].TemplateId");
+                AssertEqual(expectedRewards[index].Count, actualRewards[index].Count, $"{name}[{index}].Count");
+            }
+        }
+
+        private static void AssertCapturedMainLine2VersionGapStagesBackedByLocalStageTable(IReadOnlyList<uint> capturedStageIds)
+        {
+            AssertEqual(55, capturedStageIds.Count, "retail MainLine2 capture version-gap Stage.tsv stage id count");
+            AssertEqual(capturedStageIds.Count, capturedStageIds.Distinct().Count(), "retail MainLine2 capture version-gap Stage.tsv distinct stage id count");
+
+            HashSet<uint> localStageIds = TableReaderV2.Parse<StageTable>()
+                .Select(stage => (uint)stage.StageId)
+                .ToHashSet();
+            foreach (uint stageId in capturedStageIds)
+            {
+                AssertEqual(true, localStageIds.Contains(stageId), $"retail MainLine2 capture stage {stageId} backed by local Stage.tsv");
+            }
+        }
+
+        private static void AssertCapturedMainLine2ChapterUpdates(long playerId, IReadOnlyList<int> chapterIds, int packetId)
+        {
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                "story-deploy-version-gap-mainline2-chapter-test");
+
+            foreach (int chapterId in chapterIds)
+            {
+                InvokeRegisteredRequestHandler(
+                    nameof(MainLine2UpdateExhibitionChapterRequest),
+                    harness.Session,
+                    packetId,
+                    new MainLine2UpdateExhibitionChapterRequest { ChapterId = chapterId });
+                MainLine2UpdateExhibitionChapterResponse response = ReadResponsePayload<MainLine2UpdateExhibitionChapterResponse>(
+                    harness,
+                    packetId,
+                    nameof(MainLine2UpdateExhibitionChapterResponse),
+                    $"MainLine2UpdateExhibitionChapterRequest captured chapter {chapterId} response");
+                AssertEqual(0, response.Code, $"MainLine2UpdateExhibitionChapterResponse captured chapter {chapterId} Code");
+            }
+        }
+
+        private static AscNet.Common.Database.Player CreateStoryDeployVersionGapPlayer(long playerId, int localCharacterId)
+        {
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            player.PlayerData.CurrTeamId = 1;
+            player.TeamGroups[1] = new TeamGroupDatum
+            {
+                TeamType = 1,
+                TeamId = 1,
+                CaptainPos = 1,
+                FirstFightPos = 1,
+                TeamData = new()
+                {
+                    { 1, localCharacterId },
+                    { 2, 0 },
+                    { 3, 0 }
+                },
+                TeamName = "VersionGap"
+            };
+            return player;
+        }
+
+        private static AscNet.Common.Database.Character CreateStoryDeployVersionGapCharacter(long playerId, int localCharacterId)
+        {
+            AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
+            character.AddCharacter((uint)localCharacterId, 80);
+            return character;
+        }
+
+        private static void AssertRetailCapturedStageDeployPath(
+            uint retailStageId,
+            int retailRobotId,
+            RobotTable requestedRobot,
+            int expectedRebootId,
+            int expectedPassTimeLimit,
+            long playerId,
+            int preFightPacketId,
+            int fightSettlePacketId)
+        {
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            AscNet.Common.Database.Stage stage = CreateLoginAccountCompatibilityStage(playerId);
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                player,
+                CreateDrawCompatibilityInventory(playerId, []),
+                "story-deploy-version-gap-retail-stage-compat-test");
+            harness.Session.stage = stage;
+
+            PreFightRequest preFightRequest = new()
+            {
+                PreFightData = new()
+                {
+                    ChallengeCount = 1,
+                    StageId = retailStageId,
+                    CardIds = null,
+                    RobotIds = null,
+                    FirstFightPos = 1,
+                    CaptainPos = 1,
+                    IsHasAssist = false
+                }
+            };
+
+            InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, preFightPacketId, preFightRequest);
+            PreFightResponse preFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness,
+                preFightPacketId,
+                nameof(PreFightResponse),
+                $"PreFightRequest retail captured stage {retailStageId} response");
+            AssertEqual(0, preFightResponse.Code, $"PreFightResponse retail captured stage {retailStageId} Code");
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"PreFightResponse retail captured stage {retailStageId}: expected FightData for accepted deploy.");
+            AssertEqual(retailStageId, preFightResponse.FightData.StageId, $"PreFightResponse retail captured stage {retailStageId} FightData.StageId");
+            AssertEqual(expectedRebootId, preFightResponse.FightData.RebootId, $"PreFightResponse retail captured stage {retailStageId} FightData.RebootId");
+            AssertEqual(expectedPassTimeLimit, preFightResponse.FightData.PassTimeLimit, $"PreFightResponse retail captured stage {retailStageId} FightData.PassTimeLimit");
+            AssertPreFightDeployedCharacterIds(
+                preFightResponse,
+                playerId,
+                [(long)requestedRobot.CharacterId],
+                $"PreFightResponse retail captured stage {retailStageId} Stage.tsv robot {retailRobotId} deployed Robot.tsv CharacterId");
+
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                fightSettlePacketId,
+                CreateMissingStageSettleRequest(retailStageId, preFightResponse.FightData.FightId, playerId));
+            (NotifyStageData stagePush, FightSettleResponse settleResponse) = ReadUnknownStageSettleResult(
+                harness,
+                fightSettlePacketId);
+            AssertEqual(0, settleResponse.Code, $"FightSettleResponse retail captured stage {retailStageId} Code");
+            if (settleResponse.Settle is null)
+                throw new InvalidDataException($"FightSettleResponse retail captured stage {retailStageId}: expected Settle payload.");
+            AssertEqual(retailStageId, (uint)settleResponse.Settle.StageId, $"FightSettleResponse retail captured stage {retailStageId} Settle.StageId");
+            AssertMissingStagePushAndPersistence(stagePush, stage, retailStageId, $"retail captured stage {retailStageId}");
+        }
+
+        private static void AssertCapturedMainLine2StageFightPathPlayable(
+            LoopbackSessionHarness harness,
+            AscNet.Common.Database.Stage stage,
+            long playerId,
+            int localCharacterId,
+            uint stageId,
+            int preFightPacketId,
+            int fightSettlePacketId)
+        {
+            string name = $"retail MainLine2 capture missing Stage.tsv stage {stageId}";
+            PreFightRequest preFightRequest = new()
+            {
+                PreFightData = new()
+                {
+                    ChallengeCount = 1,
+                    StageId = stageId,
+                    CardIds = [],
+                    RobotIds = [],
+                    FirstFightPos = 1,
+                    CaptainPos = 1,
+                    IsHasAssist = false
+                }
+            };
+
+            InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, preFightPacketId, preFightRequest);
+            PreFightResponse preFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness,
+                preFightPacketId,
+                nameof(PreFightResponse),
+                $"{name} PreFightResponse");
+            AssertEqual(0, preFightResponse.Code, $"{name} PreFightResponse Code");
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"{name}: expected PreFightResponse FightData for accepted deploy.");
+            AssertEqual(stageId, preFightResponse.FightData.StageId, $"{name} PreFightResponse FightData.StageId");
+            List<long> expectedCharacterIds = ExpectedStageDeployCharacterIds(stageId, localCharacterId);
+            AssertPreFightDeployedCharacterIds(
+                preFightResponse,
+                playerId,
+                expectedCharacterIds,
+                $"{name} PreFightResponse deployed character ids");
+
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                fightSettlePacketId,
+                CreateMissingStageSettleRequest(stageId, preFightResponse.FightData.FightId, playerId));
+            (NotifyStageData stagePush, FightSettleResponse settleResponse) = ReadUnknownStageSettleResult(
+                harness,
+                fightSettlePacketId);
+            AssertAcceptedMissingStageSettle(settleResponse, stageId, $"{name} FightSettleResponse");
+            AssertMissingStagePushAndPersistence(stagePush, stage, stageId, name);
+        }
+
+        private static FightSettleRequest CreateMissingStageSettleRequest(uint stageId, long fightId, long playerId)
+        {
+            return new FightSettleRequest
+            {
+                Result = new()
+                {
+                    IsWin = true,
+                    IsForceExit = false,
+                    StageId = stageId,
+                    FightId = fightId,
+                    AddStars = 7,
+                    PlayerIds = [playerId],
+                    PlayerData = [],
+                    Operations = new(),
+                    Codes = [],
+                    NpcHpInfo = new(),
+                    NpcDpsTable = new(),
+                    EventSet = [],
+                    GroupDropDatas = []
+                }
+            };
+        }
+
+        private static void AssertAcceptedMissingStageSettle(FightSettleResponse settleResponse, uint stageId, string name)
+        {
+            AssertEqual(0, settleResponse.Code, $"{name} Code");
+            if (settleResponse.Settle is null)
+                throw new InvalidDataException($"{name}: expected Settle payload for accepted settle.");
+            AssertEqual(stageId, (uint)settleResponse.Settle.StageId, $"{name} Settle.StageId");
+        }
+
+        private static List<long> ExpectedStageDeployCharacterIds(uint stageId, int fallbackCharacterId)
+        {
+            StageTable stage = TableReaderV2.Parse<StageTable>().Single(stage => (uint)stage.StageId == stageId);
+            Dictionary<int, int> robotCharacterIds = TableReaderV2.Parse<RobotTable>()
+                .Where(robot => Convert.ToInt32(robot.CharacterId) > 0)
+                .ToDictionary(robot => robot.Id, robot => Convert.ToInt32(robot.CharacterId));
+            List<long> expectedRobotCharacterIds = stage.RobotId
+                .Where(robotId => robotId > 0 && robotCharacterIds.ContainsKey(robotId))
+                .Select(robotId => (long)robotCharacterIds[robotId])
+                .ToList();
+            return expectedRobotCharacterIds.Count > 0
+                ? expectedRobotCharacterIds
+                : [fallbackCharacterId];
+        }
+
+        private static void AssertPreFightDeployedCharacterIds(
+            PreFightResponse preFightResponse,
+            long playerId,
+            IReadOnlyList<long> expectedCharacterIds,
+            string name)
+        {
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"{name}: expected FightData.");
+            PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData playerRole = preFightResponse.FightData.RoleData.SingleOrDefault(role => role.Id == (uint)playerId)
+                ?? throw new InvalidDataException($"{name}: expected player RoleData for accepted deploy.");
+            if (playerRole.NpcData is null)
+                throw new InvalidDataException($"{name}: expected NpcData for accepted deploy.");
+            AssertIntegerList(
+                expectedCharacterIds,
+                playerRole.NpcData
+                    .OrderBy(npc => npc.Key)
+                    .Select(npc => (long)RequiredNpcCharacterId(npc, name))
+                    .ToArray(),
+                name);
+        }
+
+        private static void AssertMissingStagePushAndPersistence(
+            NotifyStageData stagePush,
+            AscNet.Common.Database.Stage stage,
+            uint stageId,
+            string name)
+        {
+            StageDatum pushedStage = stagePush.StageList.SingleOrDefault(stageDatum => stageDatum.StageId == stageId)
+                ?? throw new InvalidDataException($"NotifyStageData {name}: missing passed stage {stageId}.");
+            AssertPassedUnknownStageDatum(pushedStage, $"NotifyStageData {name}");
+
+            if (!stage.Stages.TryGetValue(stageId, out StageDatum? persistedStage))
+                throw new InvalidDataException($"{name}: session stage data did not persist passed stage {stageId}.");
+            AssertPassedUnknownStageDatum(persistedStage, $"Persisted {name}");
+        }
+
+        private static void AssertCapturedMainLine2StageEnterStoryPlayable(
+            LoopbackSessionHarness harness,
+            AscNet.Common.Database.Stage stage,
+            uint stageId,
+            int packetId)
+        {
+            string name = $"retail MainLine2 capture missing Stage.tsv stage {stageId} EnterStory";
+            if (stage.Stages.ContainsKey(stageId))
+                throw new InvalidDataException($"{name}: test setup expected EnterStory to be the first writer for this stage.");
+
+            InvokeRegisteredRequestHandler(
+                nameof(EnterStoryRequest),
+                harness.Session,
+                packetId,
+                new EnterStoryRequest { StageId = (int)stageId });
+            (NotifyStageData stagePush, EnterStoryResponse response) = ReadUnknownStageEnterStoryResult(harness, packetId, name);
+            AssertEqual(0, response.Code, $"{name} Code");
+            AssertMissingStagePushAndPersistence(stagePush, stage, stageId, name);
+        }
+
+        private static (NotifyStageData StagePush, EnterStoryResponse Response) ReadUnknownStageEnterStoryResult(
+            LoopbackSessionHarness harness,
+            int expectedPacketId,
+            string name)
+        {
+            NotifyStageData? stagePush = null;
+            EnterStoryResponse? enterStoryResponse = null;
+
+            for (int packetIndex = 0; packetIndex < 3 && (stagePush is null || enterStoryResponse is null); packetIndex++)
+            {
+                Packet packet = packetIndex == 0
+                    ? harness.ReadPacket($"{name} first packet")
+                    : harness.ReadPacket($"{name} packet {packetIndex + 1}");
+
+                switch (packet.Type)
+                {
+                    case Packet.ContentType.Push:
+                        Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                        if (push.Name == nameof(NotifyStageData))
+                        {
+                            stagePush = MessagePackSerializer.Deserialize<NotifyStageData>(push.Content);
+                        }
+                        break;
+                    case Packet.ContentType.Response:
+                        Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+                        AssertEqual(expectedPacketId, response.Id, $"{name} packet id");
+                        AssertEqual(nameof(EnterStoryResponse), response.Name, $"{name} packet name");
+                        enterStoryResponse = MessagePackSerializer.Deserialize<EnterStoryResponse>(response.Content);
+                        break;
+                    default:
+                        throw new InvalidDataException($"{name}: unexpected packet type {packet.Type}.");
+                }
+            }
+
+            if (stagePush is null)
+                throw new InvalidDataException($"{name}: expected NotifyStageData push.");
+            if (enterStoryResponse is null)
+                throw new InvalidDataException($"{name}: expected EnterStoryResponse.");
+
+            return (stagePush, enterStoryResponse);
+        }
+
+        private static RobotTable AssertStoryDeployRobotCharacterTableCompatibility(int retailRobotId, uint retailRobotCharacterId)
+        {
+            Dictionary<int, CharacterTable> characterRowsById = TableReaderV2.Parse<CharacterTable>()
+                .ToDictionary(character => character.Id);
+            List<RobotTable> robotRows = TableReaderV2.Parse<RobotTable>();
+
+            foreach (RobotTable robot in robotRows)
+            {
+                int characterId = Convert.ToInt32(robot.CharacterId);
+                if (!characterRowsById.ContainsKey(characterId))
+                    throw new InvalidDataException($"Robot.tsv row {robot.Id}: CharacterId {characterId} does not map to an existing Character.tsv row.");
+            }
+
+            RobotTable requestedRobot = robotRows.SingleOrDefault(robot => robot.Id == retailRobotId)
+                ?? throw new InvalidDataException($"Story deploy version-gap test setup error: Robot.tsv is missing retail captured robot {retailRobotId}.");
+            AssertEqual((int)retailRobotCharacterId, Convert.ToInt32(requestedRobot.CharacterId), $"Robot.tsv retail captured robot {retailRobotId} CharacterId");
+            return requestedRobot;
+        }
+        private static uint RequiredNpcCharacterId(KeyValuePair<int, dynamic> npc, string name)
+        {
+            System.Collections.IDictionary npcData = RequiredDynamicMap(npc.Value, $"{name} NpcData[{npc.Key}]");
+            System.Collections.IDictionary character = RequiredDynamicMap(
+                RequiredDynamicValue(npcData, "Character", $"{name} NpcData[{npc.Key}]"),
+                $"{name} NpcData[{npc.Key}].Character");
+            return (uint)RequiredDynamicInteger(character, "Id", $"{name} NpcData[{npc.Key}].Character");
+        }
+
+
+        private static (NotifyStageData StagePush, FightSettleResponse Response) ReadUnknownStageSettleResult(
+            LoopbackSessionHarness harness,
+            int expectedPacketId)
+        {
+            NotifyStageData? stagePush = null;
+            FightSettleResponse? settleResponse = null;
+
+            for (int packetIndex = 0; packetIndex < 16 && (stagePush is null || settleResponse is null); packetIndex++)
+            {
+                Packet packet = harness.ReadPacket(packetIndex == 0
+                    ? "FightSettleRequest unknown Stage.tsv row first packet"
+                    : $"FightSettleRequest unknown Stage.tsv row packet {packetIndex + 1}");
+
+                switch (packet.Type)
+                {
+                    case Packet.ContentType.Push:
+                        Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                        if (push.Name == nameof(NotifyStageData))
+                        {
+                            stagePush = MessagePackSerializer.Deserialize<NotifyStageData>(push.Content);
+                        }
+                        break;
+                    case Packet.ContentType.Response:
+                        Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+                        AssertEqual(expectedPacketId, response.Id, "FightSettleResponse unknown Stage.tsv row packet id");
+                        AssertEqual(nameof(FightSettleResponse), response.Name, "FightSettleResponse unknown Stage.tsv row packet name");
+                        settleResponse = MessagePackSerializer.Deserialize<FightSettleResponse>(response.Content);
+                        break;
+                    default:
+                        throw new InvalidDataException($"FightSettleRequest unknown Stage.tsv row: unexpected packet type {packet.Type}.");
+                }
+            }
+
+            if (stagePush is null)
+                throw new InvalidDataException("FightSettleRequest unknown Stage.tsv row: expected NotifyStageData push.");
+            if (settleResponse is null)
+                throw new InvalidDataException("FightSettleRequest unknown Stage.tsv row: expected FightSettleResponse.");
+
+            return (stagePush, settleResponse);
+        }
+
+        private static void AssertPassedUnknownStageDatum(StageDatum stageDatum, string name)
+        {
+            AssertEqual(true, stageDatum.Passed, $"{name} Passed");
+            AssertEqual(7L, stageDatum.StarsMark, $"{name} StarsMark");
+            AssertEqual(1L, stageDatum.PassTimesTotal, $"{name} PassTimesTotal");
         }
 
         private static List<RewardGoodsTable> ResolveRewardGoods(int rewardId, IReadOnlyCollection<RewardGoodsTable> rewardGoodsTables, string name)

@@ -373,3 +373,9 @@ Scripts/table
 
 # macOS metadata
 .DS_Store
+
+# ignore packet captures
+*.pcap
+
+# ignore proxylog
+proxylog

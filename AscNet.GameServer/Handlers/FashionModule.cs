@@ -67,7 +67,6 @@ namespace AscNet.GameServer.Handlers
                     || req.FashionId == (uint)(characterRow.DefaultNpcFashtionId + 2));
             bool ownsCharacter = isAwakenFashion && session.character.Characters.Any(x => x.Id == fashionRow!.CharacterId);
             var fashion = session.character.Fashions.Find(x => x.Id == req.FashionId);
-            session.log.Info($"[AWAKEN-PROBE] FashionUnLockRequest fashionId={req.FashionId} tableFound={fashionRow is not null} characterId={fashionRow?.CharacterId.ToString() ?? "<null>"} characterDefaultFashion={characterRow?.DefaultNpcFashtionId.ToString() ?? "<null>"} isAwakenFashion={isAwakenFashion} ownsCharacter={ownsCharacter} existingFashion={fashion is not null} existingLocked={fashion?.IsLock.ToString() ?? "<null>"}");
             bool changed = false;
 
             if (fashion is null && ownsCharacter)
@@ -92,10 +91,8 @@ namespace AscNet.GameServer.Handlers
                 fashionSync.FashionList.Add(fashion);
                 session.SendPush(fashionSync);
                 session.character.Save();
-                session.log.Info($"[AWAKEN-PROBE] FashionUnLockChanged fashionId={req.FashionId} pushed=True saved=True");
             }
 
-            session.log.Info($"[AWAKEN-PROBE] FashionUnLockResponse fashionId={req.FashionId} changed={changed} finalFashionPresent={fashion is not null} finalLocked={fashion?.IsLock.ToString() ?? "<null>"}");
             session.SendResponse(new FashionUnLockResponse(), packet.Id);
         }
     }

@@ -335,8 +335,59 @@ namespace AscNet.Common.MsgPack
     public class FubenMainLineLuosaitaData
     {
         public Int32 IncId { get; set; }
-        public List<dynamic> SectionInfos { get; set; } = new();
-        public List<dynamic> KillEnemySet { get; set; } = new();
+        public List<MainLineLuosaitaSectionInfo> SectionInfos { get; set; } = new();
+        public List<Int32> KillEnemySet { get; set; } = new();
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class MainLineLuosaitaSectionInfo
+    {
+        public Int32 SectionId { get; set; }
+        public List<MainLineLuosaitaBlockInfo> BlockInfos { get; set; } = new();
+        public List<MainLineLuosaitaSectionMember> SectionMembers { get; set; } = new();
+        public List<MainLineLuosaitaDocInfo> DocList { get; set; } = new();
+        public List<Int32> CharacterMoveIds { get; set; } = new();
+        public Int32 SectionStatus { get; set; }
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class MainLineLuosaitaBlockInfo
+    {
+        public Int32 Id { get; set; }
+        public Int32 BlockStatus { get; set; }
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class MainLineLuosaitaSectionMember
+    {
+        public Int32 Guid { get; set; }
+        public Int32 Type { get; set; }
+        public Int32 BlockId { get; set; }
+        public Int32 PosId { get; set; }
+        public Int32 CharacterId { get; set; }
+        public Int32 StageId { get; set; }
+        public MainLineLuosaitaUnitInfo? EnemyInfo { get; set; }
+        public MainLineLuosaitaUnitInfo? ArmyInfo { get; set; }
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class MainLineLuosaitaUnitInfo
+    {
+        public Int32 Id { get; set; }
+        public Int32 CurHp { get; set; }
+        public Int32 ExtraAttack { get; set; }
+    }
+
+
+    [global::MessagePack.MessagePackObject(true)]
+    public class MainLineLuosaitaDocInfo
+    {
+        public Int32 Id { get; set; }
+        public Boolean Used { get; set; }
     }
 
 
@@ -2541,6 +2592,7 @@ namespace AscNet.Common.MsgPack
             public Int32 ChallengeCount { get; set; }
             public UInt32 StageId { get; set; }
             public List<UInt32>? CardIds { get; set; } = new();
+            public List<Int32>? RobotIds { get; set; } = new();
             public Int32 FirstFightPos { get; set; }
             public Int32 CaptainPos { get; set; }
             public Boolean IsHasAssist { get; set; }

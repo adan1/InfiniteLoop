@@ -250,9 +250,6 @@ namespace AscNet.GameServer.Handlers
         {
             CharacterPromoteGradeRequest req = packet.Deserialize<CharacterPromoteGradeRequest>();
             CharacterData? character = session.character.Characters.Find(c => c.Id == req.TemplateId);
-            bool passedStoryOneFour = session.stage?.Stages.TryGetValue(10010104, out StageDatum? storyOneFour) == true && storyOneFour.Passed;
-            bool passedStoryOneEight = session.stage?.Stages.TryGetValue(10010204, out StageDatum? storyOneEight) == true && storyOneEight.Passed;
-            session.log.Info($"[AWAKEN-PROBE] CharacterPromoteGradeRequest templateId={req.TemplateId} owned={character is not null} currentGrade={character?.Grade.ToString() ?? "<missing>"} stage10010104Passed={passedStoryOneFour} stage10010204Passed={passedStoryOneEight}");
 
 
             try
@@ -267,7 +264,6 @@ namespace AscNet.GameServer.Handlers
                     .Where(x => x.CharacterId == req.TemplateId)
                     .ToList();
                 CharacterGradeTable? currentGrade = gradeRows.Find(x => x.Grade == character.Grade);
-                session.log.Info($"[AWAKEN-PROBE] CharacterPromoteGradeTable templateId={req.TemplateId} gradeRows={gradeRows.Count} currentGrade={character.Grade} conditionIds=[{string.Join(",", currentGrade?.ConditionId ?? new List<int>())}] useItemKey={currentGrade?.UseItemKey?.ToString() ?? "<null>"} useItemCount={currentGrade?.UseItemCount?.ToString() ?? "<null>"}");
                 if (currentGrade is null)
                 {
                     // CharacterManagerGetGradeTemplateNotFound
@@ -293,11 +289,9 @@ namespace AscNet.GameServer.Handlers
                 }
 
                 character.Grade = nextGrade;
-                session.log.Info($"[AWAKEN-PROBE] CharacterPromoteGradeSuccess templateId={req.TemplateId} nextGrade={nextGrade}");
             }
             catch (ServerCodeException ex)
             {
-                session.log.Warn($"[AWAKEN-PROBE] CharacterPromoteGradeFailed templateId={req.TemplateId} code={ex.Code} message={ex.Message}");
                 session.SendResponse(new CharacterPromoteGradeResponse() { Code = ex.Code }, packet.Id);
                 return;
             }

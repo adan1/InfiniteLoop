@@ -311,12 +311,18 @@ namespace AscNet.GameServer.Handlers
             StageTable? stageTable = TableReaderV2.Parse<StageTable>().Find(x => x.StageId == req.PreFightData.StageId);
             if (stageTable is null)
             {
-                // FubenManagerCheckPreFightStageInfoNotFound
-                session.SendResponse(new PreFightResponse() { Code = 20003012 }, packet.Id);
-                return;
+                string cardIds = req.PreFightData.CardIds is null
+                    ? "<null>"
+                    : string.Join(",", req.PreFightData.CardIds);
+                session.log.Warn($"[STAGE-PROBE] PreFightStageTableMissing stageId={req.PreFightData.StageId} challengeCount={req.PreFightData.ChallengeCount} cardIds={cardIds}");
             }
 
-            var levelControl = TableReaderV2.Parse<Table.V2.share.fuben.StageLevelControlTable>().Where(x => x.StageId == stageTable.StageId).OrderBy(x => Math.Abs(session.player.PlayerData.Level - x.MaxLevel)).FirstOrDefault();
+            var levelControl = stageTable is null
+                ? null
+                : TableReaderV2.Parse<Table.V2.share.fuben.StageLevelControlTable>()
+                    .Where(x => x.StageId == stageTable.StageId)
+                    .OrderBy(x => Math.Abs(session.player.PlayerData.Level - x.MaxLevel))
+                    .FirstOrDefault();
 
             PreFightResponse rsp = new()
             {
@@ -328,8 +334,8 @@ namespace AscNet.GameServer.Handlers
                     OnlineMode = 0,
                     Seed = (uint)Random.Shared.NextInt64(0, uint.MaxValue),
                     StageId = req.PreFightData.StageId,
-                    RebootId = stageTable.RebootId ?? 0,
-                    PassTimeLimit = stageTable.PassTimeLimit ?? 0,
+                    RebootId = stageTable?.RebootId ?? 0,
+                    PassTimeLimit = stageTable?.PassTimeLimit ?? 0,
                     StarsMark = 0,
                     MonsterLevel = levelControl?.MonsterLevel ?? new()
                 }
@@ -344,31 +350,61 @@ namespace AscNet.GameServer.Handlers
                 NpcData = new()
             });
 
-            if (req.PreFightData?.CardIds is not null)
-            {
-                for (int i = 0; i < req.PreFightData.CardIds.Count; i++)
-                {
-                    uint cardId = req.PreFightData.CardIds[i];
-                    var characterData = session.character.Characters.FirstOrDefault(x => x.Id == cardId);
-                    if (characterData is null)
-                        continue;
+            IReadOnlyList<uint> cardIdsToDeploy = (req.PreFightData.CardIds ?? [])
+                .Where(cardId => cardId > 0)
+                .ToList();
+            List<int> robotIds = stageTable?.RobotId
+                ?? req.PreFightData.RobotIds?.Where(robotId => robotId > 0).ToList()
+                ?? new();
 
-                    rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Add(i, new
-                    {
-                        Character = characterData,
-                        Equips = session.character.Equips.Where(x => x.CharacterId == cardId)
-                    });
+            if (robotIds.Count > 0)
+            {
+                HashSet<int> deployableRobotIds = TableReaderV2.Parse<RobotTable>()
+                    .Where(robot => robot.CharacterId is > 0)
+                    .Select(robot => robot.Id)
+                    .ToHashSet();
+                robotIds = robotIds.Where(deployableRobotIds.Contains).ToList();
+            }
+
+            if (robotIds.Count == 0 && cardIdsToDeploy.Count == 0)
+            {
+                int currentTeamId = (int)session.player.PlayerData.CurrTeamId;
+                if (session.player.TeamGroups.TryGetValue(currentTeamId, out TeamGroupDatum? teamGroup))
+                {
+                    cardIdsToDeploy = teamGroup.TeamData
+                        .OrderBy(member => member.Key)
+                        .Select(member => (uint)member.Value)
+                        .Where(cardId => cardId > 0)
+                        .ToList();
                 }
             }
 
-            if (req.PreFightData?.CardIds is null || (req.PreFightData.CardIds.Count + stageTable.RobotId.Count) == 3)
+            for (int i = 0; i < cardIdsToDeploy.Count; i++)
+            {
+                uint cardId = cardIdsToDeploy[i];
+                var characterData = session.character.Characters.FirstOrDefault(x => x.Id == cardId);
+                if (characterData is null)
+                    continue;
+
+                rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Add(i, new
+                {
+                    Character = characterData,
+                    Equips = session.character.Equips.Where(x => x.CharacterId == cardId)
+                });
+            }
+
+            if (robotIds.Count > 0
+                && (stageTable is null || req.PreFightData.CardIds is null || cardIdsToDeploy.Count == 0 || (cardIdsToDeploy.Count + robotIds.Count) == 3))
             {
                 int npcKey = rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Keys.Count;
-                foreach (var robotId in stageTable.RobotId)
+                foreach (var robotId in robotIds)
                 {
                     RobotTable? robot = TableReaderV2.Parse<RobotTable>().Find(x => x.Id == robotId);
                     if (robot is null)
+                    {
+                        session.log.Warn($"[STAGE-PROBE] PreFightRobotTableMissing stageId={req.PreFightData.StageId} robotId={robotId}");
                         continue;
+                    }
 
                     CharacterSkillTable? characterSkill = TableReaderV2.Parse<CharacterSkillTable>().Find(x => x.CharacterId == robot.CharacterId);
                     IEnumerable<int> skills = characterSkill?.SkillGroupId.SelectMany(x => TableReaderV2.Parse<CharacterSkillGroupTable>().Find(y => y.Id == x)?.SkillId ?? new List<int>()) ?? new List<int>();
@@ -376,19 +412,20 @@ namespace AscNet.GameServer.Handlers
                     {
                         new()
                         {
-                            TemplateId = (uint)robot.WeaponId,
-                            Level = robot.WeaponLevel,
-                            Breakthrough = robot.WeaponBeakThrough,
+                            TemplateId = (uint)Convert.ToInt32(robot.WeaponId),
+                            Level = Convert.ToInt32(robot.WeaponLevel),
+                            Breakthrough = Convert.ToInt32(robot.WeaponBeakThrough),
                         }
                     };
 
-                    for (int i = 0; i < robot.WaferId.Count; i++)
+                    int waferCount = Math.Min(robot.WaferId.Count, Math.Min(robot.WaferLevel.Count, robot.WaferBreakThrough.Count));
+                    for (int i = 0; i < waferCount; i++)
                     {
                         equips.Add(new()
                         {
-                            TemplateId = (uint)robot.WaferId[i],
-                            Level = robot.WaferLevel[i],
-                            Breakthrough = robot.WaferBreakThrough[i]
+                            TemplateId = (uint)Convert.ToInt32(robot.WaferId[i]),
+                            Level = Convert.ToInt32(robot.WaferLevel[i]),
+                            Breakthrough = Convert.ToInt32(robot.WaferBreakThrough[i])
                         });
                     }
 
@@ -396,15 +433,15 @@ namespace AscNet.GameServer.Handlers
                     {
                         Character = new CharacterData()
                         {
-                            Id = (uint)robot.CharacterId,
-                            Level = robot.CharacterLevel,
+                            Id = (uint)Convert.ToInt32(robot.CharacterId),
+                            Level = Convert.ToInt32(robot.CharacterLevel),
                             Exp = 0,
-                            Quality = robot.CharacterQuality,
-                            InitQuality = robot.CharacterQuality,
-                            Star = robot.CharacterStar,
-                            Grade = robot.CharacterGrade,
-                            SkillList = skills.Where(x => !robot.RemoveSkillId.Contains(x)).Select(x => new CharacterSkill() { Id = (uint)x, Level = Math.Min(robot.SkillLevel, TableReaderV2.Parse<CharacterSkillLevelEffectTable>().OrderByDescending(x => x.Level).FirstOrDefault(y => y.SkillId == x)?.Level ?? 1) }).ToList(),
-                            FashionId = (uint)robot.FashionId,
+                            Quality = Convert.ToInt32(robot.CharacterQuality),
+                            InitQuality = Convert.ToInt32(robot.CharacterQuality),
+                            Star = Convert.ToInt32(robot.CharacterStar),
+                            Grade = Convert.ToInt32(robot.CharacterGrade),
+                            SkillList = skills.Where(x => !robot.RemoveSkillId.Contains(x)).Select(x => new CharacterSkill() { Id = (uint)x, Level = Math.Min(Convert.ToInt32(robot.SkillLevel), TableReaderV2.Parse<CharacterSkillLevelEffectTable>().OrderByDescending(x => x.Level).FirstOrDefault(y => y.SkillId == x)?.Level ?? 1) }).ToList(),
+                            FashionId = (uint)Convert.ToInt32(robot.FashionId),
                             CreateTime = 0,
                             TrustLv = 1,
                             TrustExp = 0,
@@ -489,21 +526,64 @@ namespace AscNet.GameServer.Handlers
             StageTable? stageTable = TableReaderV2.Parse<StageTable>().FirstOrDefault(x => x.StageId == req.Result.StageId);
             if (stageTable is null)
             {
-                // FightCheckManagerSettleCodeNotMatch
-                session.SendResponse(new FightSettleResponse() { Code = 20032004 }, packet.Id);
-                return;
+                session.log.Warn($"[STAGE-PROBE] FightSettleStageTableMissing stageId={req.Result.StageId} fightId={req.Result.FightId}");
             }
 
+            StageLevelControlTable? levelControl = stageTable is null
+                ? null
+                : TableReaderV2.Parse<StageLevelControlTable>()
+                    .Where(x => x.StageId == stageTable.StageId)
+                    .OrderBy(x => Math.Abs(session.player.PlayerData.Level - x.MaxLevel))
+                    .FirstOrDefault();
             int challengeCount = session.fight?.PreFight.PreFightData.ChallengeCount ?? 1;
             bool isFirstClear = !session.stage.Stages.ContainsKey(req.Result.StageId);
-            int teamExp = GetStageTeamExp(stageTable, isFirstClear) * challengeCount;
-            int cardExp = GetStageCardExp(stageTable, isFirstClear) * challengeCount;
+            int teamExp = stageTable is null ? 0 : GetStageTeamExp(stageTable, isFirstClear) * challengeCount;
+            int cardExp = stageTable is null ? 0 : GetStageCardExp(stageTable, isFirstClear) * challengeCount;
+
+            List<int> rewardIds = new();
+            void AddRewardId(int? rewardId)
+            {
+                if (rewardId is > 0 && !rewardIds.Contains(rewardId.Value))
+                    rewardIds.Add(rewardId.Value);
+            }
+
+            if (stageTable is not null)
+            {
+                if (isFirstClear)
+                {
+                    AddRewardId(stageTable.FinishDropId);
+                    AddRewardId(stageTable.FirstRewardId);
+                    AddRewardId(levelControl?.FinishDropId);
+                    AddRewardId(levelControl?.FirstRewardId);
+                }
+                else
+                {
+                    AddRewardId(stageTable.FinishDropId);
+                    AddRewardId(levelControl?.FinishDropId);
+                }
+            }
 
             List<List<RewardGoods>> multiRewards = new();
-            List<RewardTable> rewardTables = TableReaderV2.Parse<RewardTable>().Where(x => isFirstClear ? (x.Id == stageTable.FinishDropId || x.Id == stageTable.FirstRewardId) : x.Id == stageTable.FinishDropId).ToList();
-            if (rewardTables.Count == 0)
+            List<RewardTable> rewardTables = TableReaderV2.Parse<RewardTable>()
+                .Where(x => rewardIds.Contains(x.Id))
+                .ToList();
+            if (stageTable is not null && rewardTables.Count == 0)
             {
-                rewardTables.AddRange(TableReaderV2.Parse<RewardTable>().Where(x => isFirstClear ? (x.Id == stageTable.FinishRewardShow || x.Id == stageTable.FirstRewardShow) : x.Id == stageTable.FinishRewardShow));
+                rewardIds.Clear();
+                if (isFirstClear)
+                {
+                    AddRewardId(stageTable.FinishRewardShow);
+                    AddRewardId(stageTable.FirstRewardShow);
+                    AddRewardId(levelControl?.FinishRewardShow);
+                    AddRewardId(levelControl?.FirstRewardShow);
+                }
+                else
+                {
+                    AddRewardId(stageTable.FinishRewardShow);
+                    AddRewardId(levelControl?.FinishRewardShow);
+                }
+
+                rewardTables.AddRange(TableReaderV2.Parse<RewardTable>().Where(x => rewardIds.Contains(x.Id)));
             }
 
             NotifyItemDataList notifyItemData = new();
@@ -548,6 +628,10 @@ namespace AscNet.GameServer.Handlers
                 session.character.Save();
             }
 
+            List<long> bestCardIds = req.Result.NpcDpsTable?
+                .Where(x => x.Value.CharacterId > 0)
+                .Select(x => (long)x.Value.CharacterId)
+                .ToList() ?? [];
             StageDatum stageData = new()
             {
                 StageId = req.Result.StageId,
@@ -562,8 +646,8 @@ namespace AscNet.GameServer.Handlers
                 CreateTime = (uint)DateTimeOffset.Now.ToUnixTimeSeconds(),
                 BestRecordTime = 0,
                 LastRecordTime = 0,
-                BestCardIds = req.Result.NpcDpsTable.Where(x => x.Value.CharacterId > 0).Select(x => (long)x.Value.CharacterId).ToList(),
-                LastCardIds = req.Result.NpcDpsTable.Where(x => x.Value.CharacterId > 0).Select(x => (long)x.Value.CharacterId).ToList()
+                BestCardIds = bestCardIds,
+                LastCardIds = bestCardIds
             };
             session.stage.AddStage(stageData);
 
@@ -574,6 +658,7 @@ namespace AscNet.GameServer.Handlers
 
             FightSettleResponse fightSettleResponse = new()
             {
+                Code = 0,
                 Settle = new()
                 {
                     IsWin = true,
