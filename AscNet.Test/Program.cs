@@ -431,6 +431,7 @@ namespace AscNet.Test
                 PacketFactory.LoadPacketHandlers();
                 AssertSplitClientFrameTailPreservesSecondRequest();
                 AssertExactReceiveBufferFillDoesNotDropFollowingRequest();
+                AssertOversizedReceiveBufferFrameDoesNotDropFollowingRequest();
             }
             finally
             {
@@ -494,6 +495,34 @@ namespace AscNet.Test
             harness.WriteClientBytes(combinedWrite);
             AssertHeartbeatResponse(harness, fillingPacketId, "Session.ClientLoop exact receive-buffer fill HeartbeatRequest response");
             AssertHeartbeatResponse(harness, followingPacketId, "Session.ClientLoop request following exact receive-buffer fill response");
+        }
+
+        private static void AssertOversizedReceiveBufferFrameDoesNotDropFollowingRequest()
+        {
+            const long playerId = 88_009;
+            const int historicalReceiveBufferLength = 1 << 16;
+            const int oversizedFrameLength = historicalReceiveBufferLength + 1;
+            const int oversizedPacketId = 91_021;
+            const int followingPacketId = 91_022;
+
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                "session-framing-oversized-buffer-compat-test");
+
+            byte[] oversizedFrame = LoopbackSessionHarness.SerializeClientRequestFrameWithTotalLength(
+                nameof(HeartbeatRequest),
+                oversizedPacketId,
+                oversizedFrameLength);
+            byte[] followingFrame = LoopbackSessionHarness.SerializeClientRequestFrame(nameof(HeartbeatRequest), followingPacketId, new HeartbeatRequest());
+            byte[] combinedWrite = GC.AllocateUninitializedArray<byte>(oversizedFrame.Length + followingFrame.Length);
+            oversizedFrame.AsSpan().CopyTo(combinedWrite);
+            followingFrame.AsSpan().CopyTo(combinedWrite.AsSpan(oversizedFrame.Length));
+
+            harness.WriteClientBytes(combinedWrite);
+            AssertHeartbeatResponse(harness, oversizedPacketId, "Session.ClientLoop oversized receive-buffer HeartbeatRequest response");
+            AssertHeartbeatResponse(harness, followingPacketId, "Session.ClientLoop request following oversized receive-buffer response");
         }
 
         private static void AssertHeartbeatResponse(LoopbackSessionHarness harness, int expectedPacketId, string name)
@@ -7199,6 +7228,25 @@ namespace AscNet.Test
             AssertEqual(0, roundTrip.Code, "MainLineLuosaitaEnterResponse Code");
             AssertLuosaitaInitialSection(roundTrip.SectionInfo, "MainLineLuosaitaEnterResponse SectionInfo");
 
+            MainLineLuosaitaEnterRequest sectionTwoRequest = new()
+            {
+                SectionId = 2
+            };
+            MainLineLuosaitaEnterRequest sectionTwoRequestRoundTrip = MessagePackSerializer.Deserialize<MainLineLuosaitaEnterRequest>(
+                MessagePackSerializer.Serialize(sectionTwoRequest));
+            AssertEqual(2, sectionTwoRequestRoundTrip.SectionId, "MainLineLuosaitaEnterRequest SectionId captured section 2");
+
+            MainLineLuosaitaEnterResponse sectionTwoResponse = new()
+            {
+                Code = 0,
+                SectionInfo = MainLineLuosaitaPayloadFactory.BuildEnterSectionInfo(sectionTwoRequestRoundTrip.SectionId)
+            };
+            MainLineLuosaitaEnterResponse sectionTwoRoundTrip = MessagePackSerializer.Deserialize<MainLineLuosaitaEnterResponse>(
+                MessagePackSerializer.Serialize(sectionTwoResponse));
+
+            AssertEqual(0, sectionTwoRoundTrip.Code, "MainLineLuosaitaEnterResponse section 2 Code");
+            AssertLuosaitaSectionTwoEnter(sectionTwoRoundTrip.SectionInfo, "MainLineLuosaitaEnterResponse section 2 SectionInfo");
+
             FubenMainLineLuosaitaData loginData = MessagePackSerializer.Deserialize<FubenMainLineLuosaitaData>(
                 MessagePackSerializer.Serialize(MainLineLuosaitaPayloadFactory.BuildLoginData()));
             AssertEqual(29, loginData.IncId, "FubenMainLineLuosaitaData IncId captured login payload");
@@ -7209,6 +7257,63 @@ namespace AscNet.Test
             AssertEqual(202, loginData.KillEnemySet[1], "FubenMainLineLuosaitaData KillEnemySet[1]");
             AssertEqual(203, loginData.KillEnemySet[2], "FubenMainLineLuosaitaData KillEnemySet[2]");
 
+            AssertEqual(
+                true,
+                MainLineLuosaitaPayloadFactory.TryBuildStageProgressSectionInfo(10380102, out MainLineLuosaitaSectionInfo stage10380102SectionInfo),
+                "MainLineLuosaitaPayloadFactory stage 10380102 captured progress found");
+            AssertLuosaitaStageProgressDocs(
+                stage10380102SectionInfo,
+                1,
+                [2, 18],
+                "MainLineLuosaitaPayloadFactory stage 10380102 captured progress SectionInfo");
+
+            AssertEqual(
+                true,
+                MainLineLuosaitaPayloadFactory.TryBuildStageProgressSectionInfo(10380110, out MainLineLuosaitaSectionInfo stage10380110SectionInfo),
+                "MainLineLuosaitaPayloadFactory stage 10380110 captured progress found");
+            AssertLuosaitaStageProgressDocs(
+                stage10380110SectionInfo,
+                2,
+                [33],
+                "MainLineLuosaitaPayloadFactory stage 10380110 captured progress SectionInfo");
+
+            AssertEqual(
+                true,
+                MainLineLuosaitaPayloadFactory.TryBuildStageProgressSectionInfo(17013901, out MainLineLuosaitaSectionInfo stage17013901SectionInfo),
+                "MainLineLuosaitaPayloadFactory stage 17013901 captured progress found");
+            AssertLuosaitaStageProgressDocs(
+                stage17013901SectionInfo,
+                1,
+                [1],
+                "MainLineLuosaitaPayloadFactory stage 17013901 captured progress SectionInfo");
+
+            Type accountModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule");
+            MethodInfo buildNotifyLogin = RequiredMethod(
+                accountModule,
+                "BuildNotifyLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session)]);
+
+            const long resumeLoginPlayerId = 78_003;
+            using (LoopbackSessionHarness resumeLoginHarness = new(
+                CreateDrawCompatibilityCharacter(resumeLoginPlayerId),
+                CreateDrawCompatibilityPlayer(resumeLoginPlayerId),
+                CreateDrawCompatibilityInventory(resumeLoginPlayerId, []),
+                "mainline-luosaita-resume-login-compat-test"))
+            {
+                resumeLoginHarness.Session.stage = CreateLuosaitaResumeCompatibilityStage(resumeLoginPlayerId);
+                NotifyLogin resumeNotifyLogin = buildNotifyLogin.Invoke(null, [resumeLoginHarness.Session]) as NotifyLogin
+                    ?? throw new InvalidDataException("AccountModule.BuildNotifyLogin returned nil or a non-NotifyLogin payload.");
+                FubenMainLineLuosaitaData resumeLoginData = MessagePackSerializer.Deserialize<FubenMainLineLuosaitaData>(
+                    MessagePackSerializer.Serialize(resumeNotifyLogin.FubenMainLineLuosaitaData));
+
+                AssertEqual(1, resumeLoginData.SectionInfos.Count, "AccountModule.BuildNotifyLogin Luosaita resume SectionInfos count");
+                AssertLuosaitaSectionMatchesCapturedStageProgress(
+                    resumeLoginData.SectionInfos[0],
+                    stage17013901SectionInfo,
+                    "AccountModule.BuildNotifyLogin Luosaita resume SectionInfos[0] from cleared stage 17013901");
+            }
+
             const long playerId = 78_001;
             const int packetId = 78_101;
             using LoopbackSessionHarness harness = new(
@@ -7216,6 +7321,7 @@ namespace AscNet.Test
                 CreateDrawCompatibilityPlayer(playerId),
                 CreateDrawCompatibilityInventory(playerId, []),
                 "mainline-luosaita-enter-compat-test");
+            harness.Session.stage = CreateLoginAccountCompatibilityStage(playerId);
             InvokeRegisteredRequestHandler(nameof(MainLineLuosaitaEnterRequest), harness.Session, packetId, requestRoundTrip);
             MainLineLuosaitaEnterResponse handlerResponse = ReadResponsePayload<MainLineLuosaitaEnterResponse>(
                 harness,
@@ -7225,7 +7331,135 @@ namespace AscNet.Test
             AssertEqual(0, handlerResponse.Code, "MainLineLuosaitaEnterRequest handler response Code");
             AssertLuosaitaInitialSection(handlerResponse.SectionInfo, "MainLineLuosaitaEnterRequest handler response SectionInfo");
 
-            ValidateRequestHandlerRegistration("MainLineLuosaitaEnterRequest");
+            const int sectionTwoPacketId = 78_102;
+            InvokeRegisteredRequestHandler(nameof(MainLineLuosaitaEnterRequest), harness.Session, sectionTwoPacketId, sectionTwoRequestRoundTrip);
+            MainLineLuosaitaEnterResponse sectionTwoHandlerResponse = ReadResponsePayload<MainLineLuosaitaEnterResponse>(
+                harness,
+                sectionTwoPacketId,
+                nameof(MainLineLuosaitaEnterResponse),
+                "MainLineLuosaitaEnterRequest section 2 response");
+            AssertEqual(0, sectionTwoHandlerResponse.Code, "MainLineLuosaitaEnterRequest section 2 handler response Code");
+            AssertLuosaitaSectionTwoEnter(sectionTwoHandlerResponse.SectionInfo, "MainLineLuosaitaEnterRequest section 2 handler response SectionInfo");
+
+            const long resumeEnterPlayerId = 78_004;
+            const int resumeEnterPacketId = 78_109;
+            using (LoopbackSessionHarness resumeEnterHarness = new(
+                CreateDrawCompatibilityCharacter(resumeEnterPlayerId),
+                CreateDrawCompatibilityPlayer(resumeEnterPlayerId),
+                CreateDrawCompatibilityInventory(resumeEnterPlayerId, []),
+                "mainline-luosaita-resume-enter-compat-test"))
+            {
+                resumeEnterHarness.Session.stage = CreateLuosaitaResumeCompatibilityStage(resumeEnterPlayerId);
+                InvokeRegisteredRequestHandler(nameof(MainLineLuosaitaEnterRequest), resumeEnterHarness.Session, resumeEnterPacketId, requestRoundTrip);
+                MainLineLuosaitaEnterResponse resumeEnterResponse = ReadResponsePayload<MainLineLuosaitaEnterResponse>(
+                    resumeEnterHarness,
+                    resumeEnterPacketId,
+                    nameof(MainLineLuosaitaEnterResponse),
+                    "MainLineLuosaitaEnterRequest section 1 existing stage 17013901 resume response");
+                AssertEqual(0, resumeEnterResponse.Code, "MainLineLuosaitaEnterRequest section 1 existing stage 17013901 resume Code");
+                AssertLuosaitaSectionMatchesCapturedStageProgress(
+                    resumeEnterResponse.SectionInfo,
+                    stage17013901SectionInfo,
+                    "MainLineLuosaitaEnterRequest section 1 existing stage 17013901 resume SectionInfo");
+            }
+
+            const int enterStoryPacketId = 78_107;
+            InvokeRegisteredRequestHandler(
+                nameof(EnterStoryRequest),
+                harness.Session,
+                enterStoryPacketId,
+                new EnterStoryRequest { StageId = 10380102 });
+            (NotifyMainLineLuosaitaSectionInfo enterStoryLuosaitaPush, EnterStoryResponse enterStoryResponse) =
+                ReadLuosaitaEnterStoryResult(harness, enterStoryPacketId, "EnterStoryRequest stage 10380102 captured Luosaita progress");
+            AssertEqual(0, enterStoryResponse.Code, "EnterStoryRequest stage 10380102 response Code");
+            AssertLuosaitaStageProgressDocs(
+                enterStoryLuosaitaPush.SectionInfo,
+                1,
+                [2],
+                "EnterStoryRequest stage 10380102 NotifyMainLineLuosaitaSectionInfo SectionInfo");
+
+            foreach ((int SectionId, int DocId, int PacketId) useDocCase in new[]
+            {
+                (SectionId: 1, DocId: 1, PacketId: 78_103),
+                (SectionId: 2, DocId: 33, PacketId: 78_104)
+            })
+            {
+                MainLineLuosaitaUseDocRequest useDocRequest = new()
+                {
+                    SectionId = useDocCase.SectionId,
+                    DocId = useDocCase.DocId
+                };
+                MainLineLuosaitaUseDocRequest useDocRequestRoundTrip = MessagePackSerializer.Deserialize<MainLineLuosaitaUseDocRequest>(
+                    MessagePackSerializer.Serialize(useDocRequest));
+                AssertEqual(useDocCase.SectionId, useDocRequestRoundTrip.SectionId, $"MainLineLuosaitaUseDocRequest section {useDocCase.SectionId} DocId {useDocCase.DocId} SectionId");
+                AssertEqual(useDocCase.DocId, useDocRequestRoundTrip.DocId, $"MainLineLuosaitaUseDocRequest section {useDocCase.SectionId} DocId {useDocCase.DocId} DocId");
+
+                InvokeRegisteredRequestHandler(nameof(MainLineLuosaitaUseDocRequest), harness.Session, useDocCase.PacketId, useDocRequestRoundTrip);
+                MainLineLuosaitaUseDocResponse useDocResponse = ReadResponsePayload<MainLineLuosaitaUseDocResponse>(
+                    harness,
+                    useDocCase.PacketId,
+                    nameof(MainLineLuosaitaUseDocResponse),
+                    $"MainLineLuosaitaUseDocRequest section {useDocCase.SectionId} DocId {useDocCase.DocId} response");
+                AssertEqual(0, useDocResponse.Code, $"MainLineLuosaitaUseDocRequest section {useDocCase.SectionId} DocId {useDocCase.DocId} handler response Code");
+                AssertLuosaitaDocUsed(useDocResponse.SectionInfo, useDocCase.SectionId, useDocCase.DocId, $"MainLineLuosaitaUseDocRequest section {useDocCase.SectionId} DocId {useDocCase.DocId} handler response SectionInfo");
+            }
+
+            foreach ((int SectionId, int PosId, int TargetPosId, int ArmyId, int ExpectedBlockId, int PacketId) moveCase in new[]
+            {
+                (SectionId: 1, PosId: 4, TargetPosId: 13, ArmyId: 101, ExpectedBlockId: 105, PacketId: 78_105),
+                (SectionId: 2, PosId: 31, TargetPosId: 37, ArmyId: 102, ExpectedBlockId: 209, PacketId: 78_106)
+            })
+            {
+                MainLineLuosaitaMoveRequest moveRequest = new()
+                {
+                    SectionId = moveCase.SectionId,
+                    PosId = moveCase.PosId,
+                    TargetPosId = moveCase.TargetPosId
+                };
+                MainLineLuosaitaMoveRequest moveRequestRoundTrip = MessagePackSerializer.Deserialize<MainLineLuosaitaMoveRequest>(
+                    MessagePackSerializer.Serialize(moveRequest));
+                AssertEqual(moveCase.SectionId, moveRequestRoundTrip.SectionId, $"MainLineLuosaitaMoveRequest section {moveCase.SectionId} {moveCase.PosId}->{moveCase.TargetPosId} SectionId");
+                AssertEqual(moveCase.PosId, moveRequestRoundTrip.PosId, $"MainLineLuosaitaMoveRequest section {moveCase.SectionId} {moveCase.PosId}->{moveCase.TargetPosId} PosId");
+                AssertEqual(moveCase.TargetPosId, moveRequestRoundTrip.TargetPosId, $"MainLineLuosaitaMoveRequest section {moveCase.SectionId} {moveCase.PosId}->{moveCase.TargetPosId} TargetPosId");
+
+                InvokeRegisteredRequestHandler(nameof(MainLineLuosaitaMoveRequest), harness.Session, moveCase.PacketId, moveRequestRoundTrip);
+                MainLineLuosaitaMoveResponse moveResponse = ReadResponsePayload<MainLineLuosaitaMoveResponse>(
+                    harness,
+                    moveCase.PacketId,
+                    nameof(MainLineLuosaitaMoveResponse),
+                    $"MainLineLuosaitaMoveRequest section {moveCase.SectionId} {moveCase.PosId}->{moveCase.TargetPosId} response");
+                AssertEqual(0, moveResponse.Code, $"MainLineLuosaitaMoveRequest section {moveCase.SectionId} {moveCase.PosId}->{moveCase.TargetPosId} handler response Code");
+                AssertLuosaitaArmyMoved(moveResponse.SectionInfo, moveCase.SectionId, moveCase.ArmyId, moveCase.TargetPosId, moveCase.ExpectedBlockId, $"MainLineLuosaitaMoveRequest section {moveCase.SectionId} {moveCase.PosId}->{moveCase.TargetPosId} handler response SectionInfo");
+            }
+
+            const long settlePlayerId = 78_002;
+            const int fightSettlePacketId = 78_108;
+            using LoopbackSessionHarness settleHarness = new(
+                CreateDrawCompatibilityCharacter(settlePlayerId),
+                CreateDrawCompatibilityPlayer(settlePlayerId),
+                CreateDrawCompatibilityInventory(settlePlayerId, []),
+                "mainline-luosaita-fight-settle-compat-test");
+            settleHarness.Session.stage = CreateLoginAccountCompatibilityStage(settlePlayerId);
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                settleHarness.Session,
+                fightSettlePacketId,
+                CreateMissingStageSettleRequest(17013901, fightSettlePacketId, settlePlayerId));
+            (NotifyMainLineLuosaitaSectionInfo fightSettleLuosaitaPush, FightSettleResponse fightSettleResponse) =
+                ReadLuosaitaFightSettleResult(settleHarness, fightSettlePacketId, "FightSettleRequest stage 17013901 captured Luosaita progress");
+            AssertEqual(0, fightSettleResponse.Code, "FightSettleRequest stage 17013901 response Code");
+            if (fightSettleResponse.Settle is null)
+                throw new InvalidDataException("FightSettleRequest stage 17013901 response: expected Settle payload.");
+            AssertEqual(17013901u, fightSettleResponse.Settle.StageId, "FightSettleRequest stage 17013901 response Settle.StageId");
+            AssertLuosaitaStageProgressDocs(
+                fightSettleLuosaitaPush.SectionInfo,
+                1,
+                [1],
+                "FightSettleRequest stage 17013901 NotifyMainLineLuosaitaSectionInfo SectionInfo");
+
+            ValidateRequestHandlerRegistration(nameof(MainLineLuosaitaEnterRequest));
+            ValidateRequestHandlerRegistration(nameof(MainLineLuosaitaMoveRequest));
+            ValidateRequestHandlerRegistration(nameof(MainLineLuosaitaUseDocRequest));
 
             static void AssertLuosaitaInitialSection(MainLineLuosaitaSectionInfo? sectionInfo, string name)
             {
@@ -7266,6 +7500,214 @@ namespace AscNet.Test
                 AssertEqual(0, sectionInfo.DocList.Count, $"{name}.DocList count");
                 AssertEqual(0, sectionInfo.CharacterMoveIds.Count, $"{name}.CharacterMoveIds count");
                 AssertEqual(0, sectionInfo.SectionStatus, $"{name}.SectionStatus");
+            }
+
+            static void AssertLuosaitaSectionTwoEnter(MainLineLuosaitaSectionInfo? sectionInfo, string name)
+            {
+                if (sectionInfo is null)
+                    throw new InvalidDataException($"{name}: expected captured section 2 SectionInfo payload, got nil.");
+
+                AssertEqual(2, sectionInfo.SectionId, $"{name}.SectionId");
+                AssertEqual(11, sectionInfo.BlockInfos.Count, $"{name}.BlockInfos count");
+                AssertEqual(9, sectionInfo.SectionMembers.Count, $"{name}.SectionMembers count");
+                AssertEqual(0, sectionInfo.DocList.Count, $"{name}.DocList count");
+                AssertEqual(0, sectionInfo.SectionStatus, $"{name}.SectionStatus");
+            }
+
+            static void AssertLuosaitaStageProgressDocs(MainLineLuosaitaSectionInfo? sectionInfo, int expectedSectionId, int[] expectedUnusedDocIds, string name)
+            {
+                if (sectionInfo is null)
+                    throw new InvalidDataException($"{name}: expected captured stage progress SectionInfo payload, got nil.");
+
+                AssertEqual(expectedSectionId, sectionInfo.SectionId, $"{name}.SectionId");
+                foreach (int docId in expectedUnusedDocIds)
+                {
+                    MainLineLuosaitaDocInfo? doc = sectionInfo.DocList.SingleOrDefault(docInfo => docInfo.Id == docId);
+                    if (doc is null)
+                        throw new InvalidDataException($"{name}.DocList: expected captured unlocked doc {docId}.");
+                    AssertEqual(false, doc.Used, $"{name}.DocList doc {docId} Used");
+                }
+            }
+
+            static void AssertLuosaitaSectionMatchesCapturedStageProgress(
+                MainLineLuosaitaSectionInfo? actual,
+                MainLineLuosaitaSectionInfo expected,
+                string name)
+            {
+                if (actual is null)
+                    throw new InvalidDataException($"{name}: expected derived captured stage progress SectionInfo payload, got nil.");
+
+                AssertEqual(expected.SectionId, actual.SectionId, $"{name}.SectionId");
+                AssertEqual(expected.BlockInfos.Count, actual.BlockInfos.Count, $"{name}.BlockInfos count");
+                foreach (MainLineLuosaitaBlockInfo expectedBlock in expected.BlockInfos)
+                {
+                    MainLineLuosaitaBlockInfo? actualBlock = actual.BlockInfos.SingleOrDefault(block => block.Id == expectedBlock.Id);
+                    if (actualBlock is null)
+                        throw new InvalidDataException($"{name}.BlockInfos: missing captured block {expectedBlock.Id}.");
+                    AssertEqual(expectedBlock.BlockStatus, actualBlock.BlockStatus, $"{name}.BlockInfos block {expectedBlock.Id} BlockStatus");
+                }
+
+                AssertEqual(expected.SectionMembers.Count, actual.SectionMembers.Count, $"{name}.SectionMembers count");
+                foreach (MainLineLuosaitaSectionMember expectedMember in expected.SectionMembers)
+                {
+                    MainLineLuosaitaSectionMember? actualMember = actual.SectionMembers.SingleOrDefault(member => member.Guid == expectedMember.Guid);
+                    if (actualMember is null)
+                        throw new InvalidDataException($"{name}.SectionMembers: missing captured member {expectedMember.Guid}.");
+                    AssertEqual(expectedMember.Type, actualMember.Type, $"{name}.SectionMembers member {expectedMember.Guid} Type");
+                    AssertEqual(expectedMember.BlockId, actualMember.BlockId, $"{name}.SectionMembers member {expectedMember.Guid} BlockId");
+                    AssertEqual(expectedMember.PosId, actualMember.PosId, $"{name}.SectionMembers member {expectedMember.Guid} PosId");
+                    AssertEqual(expectedMember.CharacterId, actualMember.CharacterId, $"{name}.SectionMembers member {expectedMember.Guid} CharacterId");
+                    AssertEqual(expectedMember.StageId, actualMember.StageId, $"{name}.SectionMembers member {expectedMember.Guid} StageId");
+                    AssertLuosaitaUnitMatches(expectedMember.ArmyInfo, actualMember.ArmyInfo, $"{name}.SectionMembers member {expectedMember.Guid} ArmyInfo");
+                    AssertLuosaitaUnitMatches(expectedMember.EnemyInfo, actualMember.EnemyInfo, $"{name}.SectionMembers member {expectedMember.Guid} EnemyInfo");
+                }
+
+                AssertEqual(expected.DocList.Count, actual.DocList.Count, $"{name}.DocList count");
+                foreach (MainLineLuosaitaDocInfo expectedDoc in expected.DocList)
+                {
+                    MainLineLuosaitaDocInfo? actualDoc = actual.DocList.SingleOrDefault(doc => doc.Id == expectedDoc.Id);
+                    if (actualDoc is null)
+                        throw new InvalidDataException($"{name}.DocList: missing captured doc {expectedDoc.Id}.");
+                    AssertEqual(expectedDoc.Used, actualDoc.Used, $"{name}.DocList doc {expectedDoc.Id} Used");
+                }
+
+                AssertEqual(expected.CharacterMoveIds.Count, actual.CharacterMoveIds.Count, $"{name}.CharacterMoveIds count");
+                for (int index = 0; index < expected.CharacterMoveIds.Count; index++)
+                    AssertEqual(expected.CharacterMoveIds[index], actual.CharacterMoveIds[index], $"{name}.CharacterMoveIds[{index}]");
+                AssertEqual(expected.SectionStatus, actual.SectionStatus, $"{name}.SectionStatus");
+            }
+
+            static void AssertLuosaitaUnitMatches(MainLineLuosaitaUnitInfo? expected, MainLineLuosaitaUnitInfo? actual, string name)
+            {
+                if (expected is null)
+                {
+                    if (actual is not null)
+                        throw new InvalidDataException($"{name}: expected nil captured unit payload.");
+                    return;
+                }
+
+                if (actual is null)
+                    throw new InvalidDataException($"{name}: expected captured unit payload, got nil.");
+
+                AssertEqual(expected.Id, actual.Id, $"{name}.Id");
+                AssertEqual(expected.CurHp, actual.CurHp, $"{name}.CurHp");
+                AssertEqual(expected.ExtraAttack, actual.ExtraAttack, $"{name}.ExtraAttack");
+            }
+
+            static (NotifyMainLineLuosaitaSectionInfo LuosaitaPush, EnterStoryResponse Response) ReadLuosaitaEnterStoryResult(
+                LoopbackSessionHarness harness,
+                int expectedPacketId,
+                string name)
+            {
+                NotifyMainLineLuosaitaSectionInfo? luosaitaPush = null;
+                EnterStoryResponse? enterStoryResponse = null;
+
+                for (int packetIndex = 0; packetIndex < 5 && (luosaitaPush is null || enterStoryResponse is null); packetIndex++)
+                {
+                    Packet packet = harness.ReadPacket(packetIndex == 0
+                        ? $"{name} first packet"
+                        : $"{name} packet {packetIndex + 1}");
+
+                    switch (packet.Type)
+                    {
+                        case Packet.ContentType.Push:
+                            Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                            if (push.Name == nameof(NotifyMainLineLuosaitaSectionInfo))
+                                luosaitaPush = MessagePackSerializer.Deserialize<NotifyMainLineLuosaitaSectionInfo>(push.Content);
+                            break;
+                        case Packet.ContentType.Response:
+                            Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+                            AssertEqual(expectedPacketId, response.Id, $"{name} packet id");
+                            AssertEqual(nameof(EnterStoryResponse), response.Name, $"{name} packet name");
+                            enterStoryResponse = MessagePackSerializer.Deserialize<EnterStoryResponse>(response.Content);
+                            break;
+                        default:
+                            throw new InvalidDataException($"{name}: unexpected packet type {packet.Type}.");
+                    }
+                }
+
+                if (luosaitaPush is null)
+                    throw new InvalidDataException($"{name}: expected NotifyMainLineLuosaitaSectionInfo push.");
+                if (enterStoryResponse is null)
+                    throw new InvalidDataException($"{name}: expected EnterStoryResponse.");
+
+                return (luosaitaPush, enterStoryResponse);
+            }
+
+            static (NotifyMainLineLuosaitaSectionInfo LuosaitaPush, FightSettleResponse Response) ReadLuosaitaFightSettleResult(
+                LoopbackSessionHarness harness,
+                int expectedPacketId,
+                string name)
+            {
+                NotifyMainLineLuosaitaSectionInfo? luosaitaPush = null;
+                FightSettleResponse? fightSettleResponse = null;
+
+                for (int packetIndex = 0; packetIndex < 16 && (luosaitaPush is null || fightSettleResponse is null); packetIndex++)
+                {
+                    Packet packet = harness.ReadPacket(packetIndex == 0
+                        ? $"{name} first packet"
+                        : $"{name} packet {packetIndex + 1}");
+
+                    switch (packet.Type)
+                    {
+                        case Packet.ContentType.Push:
+                            Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                            if (push.Name == nameof(NotifyMainLineLuosaitaSectionInfo))
+                                luosaitaPush = MessagePackSerializer.Deserialize<NotifyMainLineLuosaitaSectionInfo>(push.Content);
+                            break;
+                        case Packet.ContentType.Response:
+                            Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+                            AssertEqual(expectedPacketId, response.Id, $"{name} packet id");
+                            AssertEqual(nameof(FightSettleResponse), response.Name, $"{name} packet name");
+                            fightSettleResponse = MessagePackSerializer.Deserialize<FightSettleResponse>(response.Content);
+                            break;
+                        default:
+                            throw new InvalidDataException($"{name}: unexpected packet type {packet.Type}.");
+                    }
+                }
+
+                if (luosaitaPush is null)
+                    throw new InvalidDataException($"{name}: expected NotifyMainLineLuosaitaSectionInfo push.");
+                if (fightSettleResponse is null)
+                    throw new InvalidDataException($"{name}: expected FightSettleResponse.");
+
+                return (luosaitaPush, fightSettleResponse);
+            }
+            static void AssertLuosaitaDocUsed(MainLineLuosaitaSectionInfo? sectionInfo, int expectedSectionId, int docId, string name)
+            {
+                if (sectionInfo is null)
+                    throw new InvalidDataException($"{name}: expected captured UseDoc SectionInfo payload, got nil.");
+
+                AssertEqual(expectedSectionId, sectionInfo.SectionId, $"{name}.SectionId");
+                MainLineLuosaitaDocInfo? doc = sectionInfo.DocList.SingleOrDefault(docInfo => docInfo.Id == docId);
+                if (doc is null)
+                    throw new InvalidDataException($"{name}.DocList: expected captured used doc {docId}.");
+                AssertEqual(true, doc.Used, $"{name}.DocList doc {docId} Used");
+            }
+
+            static void AssertLuosaitaArmyMoved(MainLineLuosaitaSectionInfo? sectionInfo, int expectedSectionId, int armyId, int expectedTargetPosId, int expectedBlockId, string name)
+            {
+                if (sectionInfo is null)
+                    throw new InvalidDataException($"{name}: expected captured Move SectionInfo payload, got nil.");
+
+                AssertEqual(expectedSectionId, sectionInfo.SectionId, $"{name}.SectionId");
+                MainLineLuosaitaSectionMember army = sectionInfo.SectionMembers.Single(member => member.Type == 1 && member.ArmyInfo?.Id == armyId);
+                AssertEqual(expectedTargetPosId, army.PosId, $"{name}.SectionMembers army {armyId} PosId");
+                AssertEqual(expectedBlockId, army.BlockId, $"{name}.SectionMembers army {armyId} BlockId");
+            }
+
+            static AscNet.Common.Database.Stage CreateLuosaitaResumeCompatibilityStage(long uid)
+            {
+                AscNet.Common.Database.Stage stage = CreateLoginAccountCompatibilityStage(uid);
+                stage.AddStage(new StageDatum
+                {
+                    StageId = 17013901,
+                    StarsMark = 7,
+                    Passed = true,
+                    PassTimesToday = 0,
+                    PassTimesTotal = 1
+                });
+                return stage;
             }
         }
 

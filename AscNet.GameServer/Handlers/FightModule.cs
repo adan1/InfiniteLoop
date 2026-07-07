@@ -309,7 +309,7 @@ namespace AscNet.GameServer.Handlers
             PreFightRequest req = MessagePackSerializer.Deserialize<PreFightRequest>(packet.Content);
 
             StageTable? stageTable = TableReaderV2.Parse<StageTable>().Find(x => x.StageId == req.PreFightData.StageId);
-            if (stageTable is null)
+            if (stageTable is null && !MainLineLuosaitaPayloadFactory.HasCapturedStageProgress((int)req.PreFightData.StageId))
             {
                 string cardIds = req.PreFightData.CardIds is null
                     ? "<null>"
@@ -492,6 +492,7 @@ namespace AscNet.GameServer.Handlers
             session.stage.AddStage(stageData);
 
             session.SendPush(new NotifyStageData() { StageList = [stageData] });
+            SendMainLineLuosaitaSectionInfoIfCaptured(session, req.StageId);
             session.SendResponse(new EnterStoryResponse(), packet.Id);
         }
 
@@ -524,7 +525,7 @@ namespace AscNet.GameServer.Handlers
         {
             FightSettleRequest req = MessagePackSerializer.Deserialize<FightSettleRequest>(packet.Content);
             StageTable? stageTable = TableReaderV2.Parse<StageTable>().FirstOrDefault(x => x.StageId == req.Result.StageId);
-            if (stageTable is null)
+            if (stageTable is null && !MainLineLuosaitaPayloadFactory.HasCapturedStageProgress((int)req.Result.StageId))
             {
                 session.log.Warn($"[STAGE-PROBE] FightSettleStageTableMissing stageId={req.Result.StageId} fightId={req.Result.FightId}");
             }
@@ -673,8 +674,20 @@ namespace AscNet.GameServer.Handlers
 
             session.fight = null;
             session.SendPush(new NotifyStageData() { StageList = new() { stageData } });
+            SendMainLineLuosaitaSectionInfoIfCaptured(session, (int)req.Result.StageId);
             TaskModule.SendStoryTaskSync(session);
             session.SendResponse(fightSettleResponse, packet.Id);
+        }
+
+        private static void SendMainLineLuosaitaSectionInfoIfCaptured(Session session, int stageId)
+        {
+            if (!MainLineLuosaitaPayloadFactory.TryBuildStageProgressSectionInfo(stageId, out MainLineLuosaitaSectionInfo sectionInfo))
+                return;
+
+            session.SendPush(new NotifyMainLineLuosaitaSectionInfo
+            {
+                SectionInfo = sectionInfo
+            });
         }
         private static int GetStageTeamExp(StageTable stageTable, bool isFirstClear)
         {

@@ -28,6 +28,9 @@ namespace AscNet.GameServer
         private long lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         private int packetNo = 0;
         private readonly MessagePackSerializerOptions lz4Options = MessagePackSerializerOptions.Standard.WithCompression(MessagePackCompression.Lz4Block);
+        private const int InitialReceiveBufferLength = 1 << 16;
+        private const int MaxReceivePacketLength = 1 << 22;
+
 
         public Session(string id, TcpClient tcpClient)
         {
@@ -55,7 +58,7 @@ namespace AscNet.GameServer
                 return;
             }
             int prevBuf = 0;
-            byte[] msg = new byte[1 << 16];
+            byte[] msg = new byte[InitialReceiveBufferLength];
 
             while (client.Connected)
             {
@@ -98,7 +101,19 @@ namespace AscNet.GameServer
                                 break;
                             }
 
-                            if (packetLen > remainingBytes - 4)
+                            if (packetLen > MaxReceivePacketLength)
+                            {
+                                log.Error($"Packet length {packetLen} exceeds maximum receive packet length {MaxReceivePacketLength}");
+                                throw new InvalidDataException($"Packet length {packetLen} exceeds maximum receive packet length {MaxReceivePacketLength}");
+                            }
+
+                            if (packetLen > msg.Length - sizeof(int))
+                            {
+                                GrowReceiveBufferForPacket(ref msg, packetLen);
+                                break;
+                            }
+
+                            if (packetLen > remainingBytes - sizeof(int))
                                 break;
 
                             readbytes += 4;
@@ -128,8 +143,11 @@ namespace AscNet.GameServer
                         }
                         else if (prevBuf == msg.Length)
                         {
-                            log.Error("Packet length exceeds receive buffer");
-                            prevBuf = 0;
+                            int pendingPacketLen = prevBuf >= sizeof(int)
+                                ? BinaryPrimitives.ReadInt32LittleEndian(msg.AsSpan(0, sizeof(int)))
+                                : 0;
+                            log.Error($"Receive buffer filled without a complete packet; bufferedBytes={prevBuf}, pendingPacketLen={pendingPacketLen}");
+                            throw new InvalidDataException($"Receive buffer filled without a complete packet; bufferedBytes={prevBuf}, pendingPacketLen={pendingPacketLen}");
                         }
 
                         foreach (var packet in packets)
@@ -196,6 +214,29 @@ namespace AscNet.GameServer
             }
 
             DisconnectProtocol();
+        }
+
+        private void GrowReceiveBufferForPacket(ref byte[] buffer, int packetLen)
+        {
+            int requiredLength = checked(packetLen + sizeof(int));
+            int newLength = buffer.Length;
+            while (newLength < requiredLength)
+            {
+                int doubledLength = newLength << 1;
+                if (doubledLength <= 0 || doubledLength > MaxReceivePacketLength + sizeof(int))
+                {
+                    newLength = MaxReceivePacketLength + sizeof(int);
+                    break;
+                }
+
+                newLength = doubledLength;
+            }
+
+            if (newLength < requiredLength)
+                newLength = requiredLength;
+
+            log.Debug($"Growing receive buffer from {buffer.Length} to {newLength} for packetLen={packetLen}");
+            Array.Resize(ref buffer, newLength);
         }
 
         public static bool IsKnownClientPush(string name)

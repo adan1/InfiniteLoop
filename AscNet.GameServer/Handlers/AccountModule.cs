@@ -403,7 +403,7 @@ namespace AscNet.GameServer.Handlers
                 FubenMainLineData = session.player.FubenMainLineData,
                 FubenEventData = new(),
                 FubenMainLine2Data = new(),
-                FubenMainLineLuosaitaData = MainLineLuosaitaPayloadFactory.BuildLoginData(),
+                FubenMainLineLuosaitaData = MainLineLuosaitaPayloadFactory.BuildLoginData(session.stage),
                 FashionColorData = new(),
                 FubenChapterExtraLoginData = new(),
                 FubenUrgentEventData = new(),
