@@ -12,6 +12,12 @@ namespace AscNet.Common.Util
                 : new JObject();
         }
 
+        public static string LoadText(string relativePath)
+        {
+            string path = ResolvePath(relativePath);
+            return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        }
+
         public static int ReadInt(JObject data, string name)
         {
             return data[name]?.Value<int>() ?? 0;
@@ -72,11 +78,31 @@ namespace AscNet.Common.Util
 
         private static string ResolvePath(string relativePath)
         {
-            if (File.Exists(relativePath))
-                return relativePath;
+            foreach (string root in CandidateRoots())
+            {
+                string directPath = Path.Combine(root, relativePath);
+                if (File.Exists(directPath))
+                    return directPath;
 
-            string resourcePath = Path.Combine("Resources", relativePath);
-            return resourcePath;
+                string resourcePath = Path.Combine(root, "Resources", relativePath);
+                if (File.Exists(resourcePath))
+                    return resourcePath;
+            }
+
+            return Path.Combine("Resources", relativePath);
+        }
+
+        private static IEnumerable<string> CandidateRoots()
+        {
+            HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+            foreach (string start in new[] { Directory.GetCurrentDirectory(), AppContext.BaseDirectory })
+            {
+                for (DirectoryInfo? directory = new(start); directory is not null; directory = directory.Parent)
+                {
+                    if (seen.Add(directory.FullName))
+                        yield return directory.FullName;
+                }
+            }
         }
     }
 }

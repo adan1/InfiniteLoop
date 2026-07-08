@@ -7,6 +7,7 @@ using AscNet.SDKServer.Models;
 using AscNet.Table.V2.share.guide;
 using AscNet.Table.V2.share.fuben;
 using AscNet.Table.V2.share.fuben.mainline;
+using AscNet.Table.V2.share.fuben.mainline2;
 using AscNet.Table.V2.share.task;
 using AscNet.Table.V2.share.exhibition;
 using AscNet.Table.V2.share.reward;
@@ -24,6 +25,7 @@ using MessagePack;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using MongoDB.Driver;
+using MongoDB.Bson;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Buffers.Binary;
@@ -42,6 +44,18 @@ namespace AscNet.Test
 {
     internal class Program
     {
+        private static readonly long[] ExpectedRetroFestivalInfoIds = [24, 29, 23, 25, 30, 27];
+        private static readonly (long Id, long StartTime, long EndTime)[] ExpectedRetroFestivalDisplayTimeLimitControls =
+        [
+            (24, 1565222400, 1889308800),
+            (29, 1612432800, 1658483940),
+            (23, 1556532000, 1632995940),
+            (25, 1612432800, 1889308800),
+            (27, 1643259600, 1644469200)
+        ];
+        private const long ExpectedRetroFestivalOngoingTimeLimitControlId = 30;
+        private const long ExpectedRetroFestivalOngoingStartTime = 1664445600;
+
         static void Main(string[] args)
         {
             try
@@ -73,6 +87,20 @@ namespace AscNet.Test
                 if (args.Contains("--mainline2-exhibition-compat-only"))
                 {
                     ValidateMainLine2UpdateExhibitionChapterCompatibility();
+                    return;
+                }
+
+                if (args.Contains("--mainline2-main-treasure-compat-only"))
+                {
+                    ValidateNotifyLoginCurrentClientCompatibilityShape();
+                    ValidateMainLine2LoginDataBsonCompatibility();
+                    ValidateMainLine2ReceiveMainTreasureCompatibility();
+                    return;
+                }
+
+                if (args.Contains("--mainline2-message-state-compat-only"))
+                {
+                    ValidateMainLine2MessageStateUpdateCompatibility();
                     return;
                 }
 
@@ -178,6 +206,12 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--fight-settle-achievement-compat-only"))
+                {
+                    ValidateFightSettleAchievementCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--pr2-quality-compat-only"))
                 {
                     ValidatePr2QualityCompatibility();
@@ -244,6 +278,12 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--big-world-enter-compat-only"))
+                {
+                    ValidateBigWorldEnterCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--current-client-notice-endpoints-only"))
                 {
                     ValidateCurrentClientNoticeEndpoints().GetAwaiter().GetResult();
@@ -275,6 +315,9 @@ namespace AscNet.Test
                 ValidateSessionClientLoopFramingCompatibility();
                 ValidateStageBookmarkCompatibilityShape();
                 ValidateMainLine2UpdateExhibitionChapterCompatibility();
+                ValidateMainLine2LoginDataBsonCompatibility();
+                ValidateMainLine2ReceiveMainTreasureCompatibility();
+                ValidateMainLine2MessageStateUpdateCompatibility();
                 ValidateMainLineLuosaitaEnterCompatibility();
                 ValidateMainLineTreasureRewardCompatibility();
                 ValidateGatherAwakenRewardCompatibility();
@@ -292,6 +335,7 @@ namespace AscNet.Test
                 ValidatePrequelRewardCompatibility();
                 ValidateStoryDeployVersionGapCompatibility();
                 ValidateFightSettleRetreatCompatibility();
+                ValidateFightSettleAchievementCompatibility();
                 ValidatePr2QualityCompatibility();
                 ValidateInventoryEquipCompatibility();
                 ValidateDrawCompatibility();
@@ -335,12 +379,42 @@ namespace AscNet.Test
             {
                 FubenMainLine2Data = new()
                 {
-                    StageDataList = [],
-                    ChapterDataList = [],
-                    TreasureData = [],
-                    AchievementData = [],
-                    EggData = [],
-                    PassStageIds = []
+                    LastPassStage = new Dictionary<int, long>
+                    {
+                        [1031] = 10310105,
+                        [1131] = 10310212
+                    },
+                    MainDatas =
+                    [
+                        new MainLine2MainDatum
+                        {
+                            Id = 1031,
+                            IsAchievementGet = false,
+                            MainTreasureIdxs = [0, 1, 2, 3]
+                        },
+                        new MainLine2MainDatum
+                        {
+                            Id = 1032,
+                            IsAchievementGet = true,
+                            MainTreasureIdxs = [0, 1]
+                        }
+                    ],
+                    ChapterDatas =
+                    [
+                        new MainLine2ChapterDatum
+                        {
+                            Id = 2008,
+                            TreasureIdxs = [0]
+                        }
+                    ],
+                    EggsTreasureDistributeData = [],
+                    FirstPassTime = new Dictionary<int, long>
+                    {
+                        [10310102] = 1744211568,
+                        [10310105] = 1744388634
+                    },
+                    MessageState = [],
+                    LastExhibitionChapterId = 25
                 },
                 FashionColorData = new()
                 {
@@ -377,6 +451,7 @@ namespace AscNet.Test
                 CreateDrawCompatibilityInventory(notifyLoginPlayerId, []),
                 "notify-login-time-limit-compat-test"))
             {
+                harness.Session.stage = CreateLoginAccountCompatibilityStage(notifyLoginPlayerId);
                 productionLogin = buildNotifyLogin.Invoke(null, [harness.Session]) as NotifyLogin
                     ?? throw new InvalidDataException("AccountModule.BuildNotifyLogin returned nil or a non-NotifyLogin payload.");
             }
@@ -384,6 +459,9 @@ namespace AscNet.Test
                 expectedCurrentDrawTimeLimitControls.Select(timeLimit => timeLimit.Id).ToArray(),
                 productionLogin.TimeLimitCtrlConfigList,
                 "AccountModule.BuildNotifyLogin NotifyLogin.TimeLimitCtrlConfigList current draw/event controls");
+            AssertRetroFestivalTimeLimitControlsPresent(
+                productionLogin.TimeLimitCtrlConfigList,
+                "AccountModule.BuildNotifyLogin NotifyLogin.TimeLimitCtrlConfigList Retro/Festival display controls");
 
             NotifyFashionColorData fashionColorData = roundTrip.FashionColorData
                 ?? throw new InvalidDataException("NotifyLogin FashionColorData serialized as nil.");
@@ -391,12 +469,28 @@ namespace AscNet.Test
 
             FubenMainLine2Data fubenMainLine2Data = roundTrip.FubenMainLine2Data
                 ?? throw new InvalidDataException("NotifyLogin FubenMainLine2Data serialized as nil.");
-            AssertEmptyList(fubenMainLine2Data.StageDataList, "NotifyLogin FubenMainLine2Data.StageDataList");
-            AssertEmptyList(fubenMainLine2Data.ChapterDataList, "NotifyLogin FubenMainLine2Data.ChapterDataList");
-            AssertEmptyList(fubenMainLine2Data.TreasureData, "NotifyLogin FubenMainLine2Data.TreasureData");
-            AssertEmptyList(fubenMainLine2Data.AchievementData, "NotifyLogin FubenMainLine2Data.AchievementData");
-            AssertEmptyList(fubenMainLine2Data.EggData, "NotifyLogin FubenMainLine2Data.EggData");
-            AssertEmptyList(fubenMainLine2Data.PassStageIds, "NotifyLogin FubenMainLine2Data.PassStageIds");
+            AssertEqual(2, fubenMainLine2Data.LastPassStage.Count, "NotifyLogin FubenMainLine2Data.LastPassStage captured retail shape count");
+            AssertEqual(10310105L, fubenMainLine2Data.LastPassStage[1031], "NotifyLogin FubenMainLine2Data.LastPassStage[1031] captured retail shape");
+            AssertEqual(10310212L, fubenMainLine2Data.LastPassStage[1131], "NotifyLogin FubenMainLine2Data.LastPassStage[1131] captured retail shape");
+            AssertEqual(2, fubenMainLine2Data.MainDatas.Count, "NotifyLogin FubenMainLine2Data.MainDatas captured retail shape count");
+            MainLine2MainDatum firstMainLine2Main = fubenMainLine2Data.MainDatas[0];
+            AssertEqual(1031, firstMainLine2Main.Id, "NotifyLogin FubenMainLine2Data.MainDatas[0].Id captured retail shape");
+            AssertEqual(false, firstMainLine2Main.IsAchievementGet, "NotifyLogin FubenMainLine2Data.MainDatas[0].IsAchievementGet captured retail shape");
+            AssertIntegerList([0, 1, 2, 3], firstMainLine2Main.MainTreasureIdxs.Select(idx => (long)idx).ToArray(), "NotifyLogin FubenMainLine2Data.MainDatas[0].MainTreasureIdxs captured retail shape");
+            MainLine2MainDatum secondMainLine2Main = fubenMainLine2Data.MainDatas[1];
+            AssertEqual(1032, secondMainLine2Main.Id, "NotifyLogin FubenMainLine2Data.MainDatas[1].Id captured retail shape");
+            AssertEqual(true, secondMainLine2Main.IsAchievementGet, "NotifyLogin FubenMainLine2Data.MainDatas[1].IsAchievementGet captured retail shape");
+            AssertIntegerList([0, 1], secondMainLine2Main.MainTreasureIdxs.Select(idx => (long)idx).ToArray(), "NotifyLogin FubenMainLine2Data.MainDatas[1].MainTreasureIdxs captured retail shape");
+            AssertEqual(1, fubenMainLine2Data.ChapterDatas.Count, "NotifyLogin FubenMainLine2Data.ChapterDatas captured retail shape count");
+            MainLine2ChapterDatum firstMainLine2Chapter = fubenMainLine2Data.ChapterDatas[0];
+            AssertEqual(2008, firstMainLine2Chapter.Id, "NotifyLogin FubenMainLine2Data.ChapterDatas[0].Id captured retail shape");
+            AssertIntegerList([0], firstMainLine2Chapter.TreasureIdxs.Select(idx => (long)idx).ToArray(), "NotifyLogin FubenMainLine2Data.ChapterDatas[0].TreasureIdxs captured retail shape");
+            AssertEmptyList(fubenMainLine2Data.EggsTreasureDistributeData, "NotifyLogin FubenMainLine2Data.EggsTreasureDistributeData captured retail shape");
+            AssertEqual(2, fubenMainLine2Data.FirstPassTime.Count, "NotifyLogin FubenMainLine2Data.FirstPassTime captured retail shape count");
+            AssertEqual(1744211568L, fubenMainLine2Data.FirstPassTime[10310102], "NotifyLogin FubenMainLine2Data.FirstPassTime[10310102] captured retail shape");
+            AssertEqual(1744388634L, fubenMainLine2Data.FirstPassTime[10310105], "NotifyLogin FubenMainLine2Data.FirstPassTime[10310105] captured retail shape");
+            AssertEqual(0, fubenMainLine2Data.MessageState.Count, "NotifyLogin FubenMainLine2Data.MessageState captured retail shape count");
+            AssertEqual(25, fubenMainLine2Data.LastExhibitionChapterId, "NotifyLogin FubenMainLine2Data.LastExhibitionChapterId captured retail shape");
 
             static void AssertTimeLimitControlsEqual(
                 IReadOnlyList<(long Id, long StartTime, long EndTime)> expected,
@@ -881,6 +975,7 @@ namespace AscNet.Test
             ];
 
             List<string> startupPushes = [];
+            List<Packet.Push> startupPushPackets = [];
             Dictionary<string, Packet.Push> startupPushesByName = new(StringComparer.Ordinal);
             const int maxStartupPushesUntilRetailTail = 192;
             for (int packetIndex = 0;
@@ -889,6 +984,7 @@ namespace AscNet.Test
             {
                 Packet.Push startupPush = ReadStartupPush(harness, $"AccountModule.DoLogin startup push {packetIndex + 1}");
                 startupPushes.Add(startupPush.Name);
+                startupPushPackets.Add(startupPush);
                 startupPushesByName.TryAdd(startupPush.Name, startupPush);
             }
 
@@ -937,10 +1033,25 @@ namespace AscNet.Test
                 startupLogin.PlayerData.ShieldFuncList.Cast<object>().Select(value => Convert.ToInt64(value)).ToArray(),
                 "AccountModule.DoLogin NotifyLogin.PlayerData.ShieldFuncList retail defaults");
 
+            if (startupLogin.FubenMainLine2Data is FubenMainLine2Data startupMainLine2Data)
+            {
+                if (startupMainLine2Data.LastPassStage.ContainsKey(1041))
+                    throw new InvalidDataException("AccountModule.DoLogin NotifyLogin.FubenMainLine2Data: current event startup must not seed Homeward/MainLine2 chapter 1041 LastPassStage.");
+                if (startupMainLine2Data.MainDatas.Any(mainData => mainData.Id == 1041))
+                    throw new InvalidDataException("AccountModule.DoLogin NotifyLogin.FubenMainLine2Data: current event startup must not seed Homeward/MainLine2 chapter 1041 MainDatas.");
+                if (startupMainLine2Data.ChapterDatas.Any(chapterData => chapterData.Id == 1041))
+                    throw new InvalidDataException("AccountModule.DoLogin NotifyLogin.FubenMainLine2Data: current event startup must not seed Homeward/MainLine2 chapter 1041 ChapterDatas.");
+                if (startupMainLine2Data.LastExhibitionChapterId == 61)
+                    throw new InvalidDataException("AccountModule.DoLogin NotifyLogin.FubenMainLine2Data: current event startup must not seed Homeward/MainLine2 exhibition chapter 61.");
+            }
+
             FunctionOpenTimeConfig? startupFunctionOpenTime = startupLogin.FunctionOpenTimeConfigList?
                 .SingleOrDefault(config => config.FunctionId == 20000 && config.TimeId == 100);
             if (startupFunctionOpenTime is null)
                 throw new InvalidDataException("AccountModule.DoLogin NotifyLogin.FunctionOpenTimeConfigList: missing FunctionId 20000 / TimeId 100.");
+            AssertRetroFestivalTimeLimitControlsPresent(
+                startupLogin.TimeLimitCtrlConfigList,
+                "AccountModule.DoLogin NotifyLogin.TimeLimitCtrlConfigList Retro/Festival display controls");
 
             NotifyFunctionalEntranceData startupFunctionalEntranceData = DeserializeStartupPush<NotifyFunctionalEntranceData>(
                 startupPushesByName,
@@ -956,6 +1067,117 @@ namespace AscNet.Test
                 nameof(AscNet.GameServer.Handlers.NotifyWorldChat),
                 "AccountModule.DoLogin NotifyWorldChat startup payload");
             AssertWorldChatSeed(startupWorldChat, "AccountModule.DoLogin NotifyWorldChat startup seed");
+
+            JObject calendarPayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                "NotifyNewActivityCalendarData",
+                "AccountModule.DoLogin NotifyNewActivityCalendarData startup payload");
+            AssertIntegerSetContainsAll(
+                [45001, 45005, 45010],
+                RequiredIntegerArray(calendarPayload, "OpenActivityIds", "AccountModule.DoLogin NotifyNewActivityCalendarData startup payload"),
+                "AccountModule.DoLogin NotifyNewActivityCalendarData.OpenActivityIds current event ids");
+            AssertEveryGotRewardsArrayEmpty(
+                calendarPayload,
+                "AccountModule.DoLogin NotifyNewActivityCalendarData startup payload");
+
+            JObject manualPayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                "NotifyWheelchairManualActivity",
+                "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload");
+            AssertEqual(1L, RequiredValue<long>(manualPayload, "ActivityId", JTokenType.Integer, "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload"), "AccountModule.DoLogin NotifyWheelchairManualActivity.ActivityId");
+            AssertEqual(1007L, RequiredValue<long>(manualPayload, "PlanId", JTokenType.Integer, "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload"), "AccountModule.DoLogin NotifyWheelchairManualActivity.PlanId");
+            AssertEqual(1L, RequiredValue<long>(manualPayload, "BpLevel", JTokenType.Integer, "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload"), "AccountModule.DoLogin NotifyWheelchairManualActivity.BpLevel fresh-account level");
+            AssertEqual(false, RequiredValue<bool>(manualPayload, "IsSeniorManualUnlock", JTokenType.Boolean, "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload"), "AccountModule.DoLogin NotifyWheelchairManualActivity.IsSeniorManualUnlock fresh-account lock state");
+            AssertEmptyJsonArray(manualPayload, "GetRewardManualRewardIds", "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload");
+            AssertEmptyJsonArray(manualPayload, "GetRewardPlanIds", "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload");
+            AssertEmptyJsonArray(manualPayload, "FinishStageIds", "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload");
+            AssertEmptyJsonArray(manualPayload, "TimeLimitActivityInfos", "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload");
+            AssertEmptyJsonArray(manualPayload, "WeekActivityInfos", "AccountModule.DoLogin NotifyWheelchairManualActivity startup payload");
+
+            AssertStartupPayloadMapContainsKeys(
+                startupPushesByName,
+                "NotifyWheelchairManualActivityUpdate",
+                "AccountModule.DoLogin NotifyWheelchairManualActivityUpdate startup payload",
+                "UpdateTimeLimitActivityInfos",
+                "UpdateWeekActivityInfos",
+                "CurrentGuildBossEndTime");
+
+            JObject accumulatedPayPayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                nameof(NotifyAccumulatedPayData),
+                "AccountModule.DoLogin NotifyAccumulatedPayData startup payload");
+            AssertEqual(1L, RequiredValue<long>(accumulatedPayPayload, "PayId", JTokenType.Integer, "AccountModule.DoLogin NotifyAccumulatedPayData startup payload"), "AccountModule.DoLogin NotifyAccumulatedPayData.PayId");
+            AssertEqual(0d, RequiredNumericValue(accumulatedPayPayload, "PayMoney", "AccountModule.DoLogin NotifyAccumulatedPayData startup payload"), "AccountModule.DoLogin NotifyAccumulatedPayData.PayMoney fresh-account total");
+            AssertEmptyJsonArray(accumulatedPayPayload, "PayRewardIds", "AccountModule.DoLogin NotifyAccumulatedPayData startup payload");
+            AssertEmptyJsonArray(accumulatedPayPayload, "ExtraPayRewardIds", "AccountModule.DoLogin NotifyAccumulatedPayData startup payload");
+
+            JObject accumulateExpendPayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                "NotifyAccumulateExpendData",
+                "AccountModule.DoLogin NotifyAccumulateExpendData startup payload");
+            AssertEqual(7L, RequiredValue<long>(accumulateExpendPayload, "ActivityId", JTokenType.Integer, "AccountModule.DoLogin NotifyAccumulateExpendData startup payload"), "AccountModule.DoLogin NotifyAccumulateExpendData.ActivityId");
+
+            JObject festivalPayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                nameof(NotifyFestivalData),
+                "AccountModule.DoLogin NotifyFestivalData startup payload");
+            JArray festivalInfos = (JArray)RequiredToken(festivalPayload, "FestivalInfos", JTokenType.Array, "AccountModule.DoLogin NotifyFestivalData startup payload");
+            if (festivalInfos.Count == 0)
+                throw new InvalidDataException("AccountModule.DoLogin NotifyFestivalData.FestivalInfos: expected current event festival entries.");
+            AssertIntegerSetContainsAll(
+                ExpectedRetroFestivalInfoIds,
+                festivalInfos
+                    .OfType<JObject>()
+                    .Select(festivalInfo => festivalInfo.Value<long>("Id"))
+                    .ToArray(),
+                "AccountModule.DoLogin NotifyFestivalData.FestivalInfos Retro/Festival ids");
+
+            JObject game2048Payload = DeserializeStartupPushMap(
+                startupPushesByName,
+                "NotifyGame2048DataDb",
+                "AccountModule.DoLogin NotifyGame2048DataDb startup payload");
+            JObject game2048Data = RequiredObject(game2048Payload, "Game2048DataDb", "AccountModule.DoLogin NotifyGame2048DataDb startup payload");
+            AssertEqual(4L, RequiredValue<long>(game2048Data, "ActivityId", JTokenType.Integer, "AccountModule.DoLogin NotifyGame2048DataDb.Game2048DataDb startup payload"), "AccountModule.DoLogin NotifyGame2048DataDb.Game2048DataDb.ActivityId");
+
+            JObject collectionPayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                "NotifyGameCollectionData",
+                "AccountModule.DoLogin NotifyGameCollectionData startup payload");
+            JObject collectionData = RequiredObject(collectionPayload, "GameCollectionData", "AccountModule.DoLogin NotifyGameCollectionData startup payload");
+            AssertEqual(1L, RequiredValue<long>(collectionData, "ActivityId", JTokenType.Integer, "AccountModule.DoLogin NotifyGameCollectionData.GameCollectionData startup payload"), "AccountModule.DoLogin NotifyGameCollectionData.GameCollectionData.ActivityId");
+
+            JObject minerPayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                "NotifyGoldenMinerGameInfo",
+                "AccountModule.DoLogin NotifyGoldenMinerGameInfo startup payload");
+            JObject minerStageData = RequiredObject(minerPayload, "StageDataDb", "AccountModule.DoLogin NotifyGoldenMinerGameInfo startup payload");
+            AssertEqual(7L, RequiredValue<long>(minerStageData, "ActivityId", JTokenType.Integer, "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb startup payload"), "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb.ActivityId");
+            AssertEqual(0L, RequiredValue<long>(minerStageData, "StageScores", JTokenType.Integer, "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb startup payload"), "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb.StageScores fresh-account score");
+            AssertEqual(0L, RequiredValue<long>(minerStageData, "TotalPlayCount", JTokenType.Integer, "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb startup payload"), "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb.TotalPlayCount fresh-account play count");
+            AssertEmptyJsonArray(minerStageData, "CharacterDbs", "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb startup payload");
+            AssertEmptyJsonArray(minerStageData, "FinishStageId", "AccountModule.DoLogin NotifyGoldenMinerGameInfo.StageDataDb startup payload");
+
+            JObject turntablePayload = DeserializeStartupPushMap(
+                startupPushesByName,
+                "NotifyTurntableData",
+                "AccountModule.DoLogin NotifyTurntableData startup payload");
+            JObject turntableData = RequiredObject(turntablePayload, "TurntableData", "AccountModule.DoLogin NotifyTurntableData startup payload");
+            AssertEqual(4L, RequiredValue<long>(turntableData, "ActivityId", JTokenType.Integer, "AccountModule.DoLogin NotifyTurntableData.TurntableData startup payload"), "AccountModule.DoLogin NotifyTurntableData.TurntableData.ActivityId");
+            AssertEqual(0L, RequiredValue<long>(turntableData, "AccumulateDrawNum", JTokenType.Integer, "AccountModule.DoLogin NotifyTurntableData.TurntableData startup payload"), "AccountModule.DoLogin NotifyTurntableData.TurntableData.AccumulateDrawNum fresh-account spins");
+            AssertEmptyJsonArray(turntableData, "GainRewardInfos", "AccountModule.DoLogin NotifyTurntableData.TurntableData startup payload");
+            AssertEmptyJsonArray(turntableData, "GainRecords", "AccountModule.DoLogin NotifyTurntableData.TurntableData startup payload");
+            AssertEmptyJsonArray(turntableData, "GainAccumulateRewardIndexs", "AccountModule.DoLogin NotifyTurntableData.TurntableData startup payload");
+
+            Dictionary<long, JObject> startupTasksById = DeserializeStartupTasksById(
+                startupPushPackets,
+                "AccountModule.DoLogin startup NotifyTask packets");
+            foreach (long requiredRetroArcadeTaskId in new long[] { 78020, 86513, 85951, 990000, 990050, 990101 })
+            {
+                AssertStartupTasksContainFreshTask(
+                    startupTasksById,
+                    requiredRetroArcadeTaskId,
+                    "AccountModule.DoLogin startup Retro Arcade NotifyTask gate batches");
+            }
             AssertStartupPayloadMapContainsKeys(
                 startupPushesByName,
                 nameof(NotifyChatBoardLoginData),
@@ -1142,6 +1364,154 @@ namespace AscNet.Test
                     throw new InvalidDataException($"{name}: expected {pushName} during login startup.");
 
                 return MessagePackSerializer.Deserialize<TPayload>(push.Content);
+            }
+
+            static JObject DeserializeStartupPushMap(
+                IReadOnlyDictionary<string, Packet.Push> startupPushesByName,
+                string pushName,
+                string name)
+            {
+                if (!startupPushesByName.TryGetValue(pushName, out Packet.Push? push))
+                    throw new InvalidDataException($"{name}: expected {pushName} during login startup.");
+
+                try
+                {
+                    return JObject.Parse(MessagePackSerializer.ConvertToJson(push.Content));
+                }
+                catch (Exception ex) when (ex is not InvalidDataException)
+                {
+                    throw new InvalidDataException($"{name}: expected a MessagePack map payload.", ex);
+                }
+            }
+
+            static IReadOnlyList<long> RequiredIntegerArray(JObject payload, string memberName, string name)
+            {
+                JArray values = (JArray)RequiredToken(payload, memberName, JTokenType.Array, name);
+                long[] integers = new long[values.Count];
+                for (int index = 0; index < values.Count; index++)
+                {
+                    JToken value = values[index]!;
+                    if (value.Type != JTokenType.Integer)
+                        throw new InvalidDataException($"{name} {memberName}[{index}]: expected JSON Integer, got {value.Type}.");
+                    integers[index] = value.Value<long>();
+                }
+
+                return integers;
+            }
+
+            static void AssertEmptyJsonArray(JObject payload, string memberName, string name)
+            {
+                JArray values = (JArray)RequiredToken(payload, memberName, JTokenType.Array, name);
+                if (values.Count != 0)
+                    throw new InvalidDataException($"{name} {memberName}: expected an empty array, got {values.Count} entries.");
+            }
+
+            static double RequiredNumericValue(JObject payload, string memberName, string name)
+            {
+                if (!payload.TryGetValue(memberName, out JToken? token))
+                    throw new InvalidDataException($"{name}: missing JSON field '{memberName}'.");
+                if (token.Type != JTokenType.Integer && token.Type != JTokenType.Float)
+                    throw new InvalidDataException($"{name} {memberName}: expected JSON numeric value, got {token.Type}.");
+
+                return token.Value<double>();
+            }
+
+            static void AssertEveryGotRewardsArrayEmpty(JToken payload, string name)
+            {
+                int gotRewardsArrayCount = 0;
+                CountEmptyGotRewardsArrays(payload, name, ref gotRewardsArrayCount);
+                if (gotRewardsArrayCount == 0)
+                    throw new InvalidDataException($"{name}: expected at least one nested GotRewards array.");
+            }
+
+            static void CountEmptyGotRewardsArrays(JToken token, string name, ref int gotRewardsArrayCount)
+            {
+                if (token is JObject obj)
+                {
+                    foreach (JProperty property in obj.Properties())
+                    {
+                        if (property.Name == "GotRewards")
+                        {
+                            if (property.Value is not JArray gotRewards)
+                                throw new InvalidDataException($"{name} {property.Path}: expected JSON Array, got {property.Value.Type}.");
+                            gotRewardsArrayCount++;
+                            if (gotRewards.Count != 0)
+                                throw new InvalidDataException($"{name} {property.Path}: expected fresh-account GotRewards to be empty, got {gotRewards.Count} entries.");
+                        }
+
+                        CountEmptyGotRewardsArrays(property.Value, name, ref gotRewardsArrayCount);
+                    }
+                }
+                else if (token is JArray array)
+                {
+                    foreach (JToken child in array)
+                        CountEmptyGotRewardsArrays(child, name, ref gotRewardsArrayCount);
+                }
+            }
+
+            static Dictionary<long, JObject> DeserializeStartupTasksById(
+                IReadOnlyList<Packet.Push> startupPushPackets,
+                string name)
+            {
+                Dictionary<long, JObject> tasksById = new();
+                int notifyTaskPushCount = 0;
+                for (int pushIndex = 0; pushIndex < startupPushPackets.Count; pushIndex++)
+                {
+                    Packet.Push push = startupPushPackets[pushIndex];
+                    if (push.Name != nameof(NotifyTask))
+                        continue;
+
+                    notifyTaskPushCount++;
+                    string pushName = $"{name} NotifyTask push {notifyTaskPushCount} at startup index {pushIndex + 1}";
+                    JObject notifyTaskPayload = DeserializeStartupPushContentMap(push, pushName);
+                    JObject tasksPayload = RequiredObject(notifyTaskPayload, "Tasks", pushName);
+                    JArray tasks = (JArray)RequiredToken(tasksPayload, "Tasks", JTokenType.Array, pushName);
+                    if (tasks.Count == 0)
+                        throw new InvalidDataException($"{pushName} Tasks.Tasks: expected at least one task entry.");
+
+                    for (int taskIndex = 0; taskIndex < tasks.Count; taskIndex++)
+                    {
+                        if (tasks[taskIndex] is not JObject taskPayload)
+                            throw new InvalidDataException($"{pushName} Tasks.Tasks[{taskIndex}]: expected JSON Object, got {tasks[taskIndex]!.Type}.");
+
+                        long taskId = RequiredValue<long>(taskPayload, "Id", JTokenType.Integer, $"{pushName} Tasks.Tasks[{taskIndex}]");
+                        tasksById.TryAdd(taskId, taskPayload);
+                    }
+                }
+
+                if (notifyTaskPushCount == 0)
+                    throw new InvalidDataException($"{name}: expected duplicate NotifyTask startup pushes for current event gate tasks.");
+
+                return tasksById;
+            }
+
+            static void AssertStartupTasksContainFreshTask(
+                IReadOnlyDictionary<long, JObject> tasksById,
+                long expectedTaskId,
+                string name)
+            {
+                if (!tasksById.TryGetValue(expectedTaskId, out JObject? taskPayload))
+                    throw new InvalidDataException($"{name}: missing task id {expectedTaskId}.");
+
+                AssertEqual(1L, RequiredValue<long>(taskPayload, "State", JTokenType.Integer, $"{name} task {expectedTaskId}"), $"{name} task {expectedTaskId} State");
+                JArray schedule = (JArray)RequiredToken(taskPayload, "Schedule", JTokenType.Array, $"{name} task {expectedTaskId}");
+                AssertEqual(1, schedule.Count, $"{name} task {expectedTaskId} Schedule count");
+                if (schedule[0] is not JObject scheduleEntry)
+                    throw new InvalidDataException($"{name} task {expectedTaskId} Schedule[0]: expected JSON Object, got {schedule[0]!.Type}.");
+                AssertEqual(expectedTaskId, RequiredValue<long>(scheduleEntry, "Id", JTokenType.Integer, $"{name} task {expectedTaskId} Schedule[0]"), $"{name} task {expectedTaskId} Schedule[0].Id");
+                AssertEqual(0L, RequiredValue<long>(scheduleEntry, "Value", JTokenType.Integer, $"{name} task {expectedTaskId} Schedule[0]"), $"{name} task {expectedTaskId} Schedule[0].Value");
+            }
+
+            static JObject DeserializeStartupPushContentMap(Packet.Push push, string name)
+            {
+                try
+                {
+                    return JObject.Parse(MessagePackSerializer.ConvertToJson(push.Content));
+                }
+                catch (Exception ex) when (ex is not InvalidDataException)
+                {
+                    throw new InvalidDataException($"{name}: expected a MessagePack map payload.", ex);
+                }
             }
 
             static void AssertClientItemList(
@@ -6124,6 +6494,1172 @@ namespace AscNet.Test
             }
         }
 
+        private static void ValidateBigWorldEnterCompatibility()
+        {
+            const string enterRequestName = "BigWorldEnterWorldRequest";
+            const string enterResponseName = "BigWorldEnterWorldResponse";
+            const int requestWorldId = 0;
+            const int requestLevelId = 0;
+            const int expectedWorldId = 400;
+            const int expectedLevelId = 4001;
+            const long playerId = 99_401;
+            const int enterPacketId = 12_001;
+
+            Type enterRequestType = RequiredPayloadType(enterRequestName);
+            _ = RequiredPayloadType(enterResponseName);
+            object enterRequest = Activator.CreateInstance(enterRequestType)
+                ?? throw new InvalidDataException($"{enterRequestName}: expected a public parameterless constructor.");
+            SetRequiredIntegerMember(enterRequest, "WorldId", requestWorldId);
+            SetRequiredIntegerMember(enterRequest, "LevelId", requestLevelId);
+
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            player.PlayerData.Gender = 2;
+            (long fixturePlayerId, string fixturePlayerName, long fixturePlayerGender, IReadOnlyList<(long PartId, long ColourId)> expectedCommanderParts) = ReadBigWorldEnterFixtureExpectations();
+            using (LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                player,
+                CreateDrawCompatibilityInventory(playerId, []),
+                "big-world-enter-compat-test"))
+            {
+                InvokeRegisteredRequestHandler(enterRequestName, harness.Session, enterPacketId, enterRequest);
+                JObject enterResponse = ReadBigWorldEnterWorldResponseWithPushes(
+                    harness,
+                    enterPacketId,
+                    enterResponseName);
+
+                AssertEqual(0L, RequiredValue<long>(enterResponse, "Code", JTokenType.Integer, enterResponseName), $"{enterResponseName} Code");
+                JObject responsePlayerData = RequiredObject(enterResponse, "PlayerData", enterResponseName);
+                AssertEqual(fixturePlayerGender, RequiredValue<long>(responsePlayerData, "Gender", JTokenType.Integer, $"{enterResponseName}.PlayerData"), $"{enterResponseName} PlayerData.Gender fixture-compatible value despite session gender 2");
+                JObject enterResultData = RequiredObject(enterResponse, "EnterResultData", enterResponseName);
+                JObject worldData = RequiredObject(enterResultData, "WorldData", $"{enterResponseName}.EnterResultData");
+                AssertEqual((long)expectedWorldId, RequiredValue<long>(worldData, "WorldId", JTokenType.Integer, $"{enterResponseName}.EnterResultData.WorldData"), $"{enterResponseName} EnterResultData.WorldData.WorldId");
+                AssertEqual((long)expectedLevelId, RequiredValue<long>(worldData, "LevelId", JTokenType.Integer, $"{enterResponseName}.EnterResultData.WorldData"), $"{enterResponseName} EnterResultData.WorldData.LevelId");
+
+                JArray players = (JArray)RequiredToken(
+                    worldData,
+                    "Players",
+                    JTokenType.Array,
+                    $"{enterResponseName}.EnterResultData.WorldData");
+                if (players.Count == 0)
+                    throw new InvalidDataException($"{enterResponseName}.EnterResultData.WorldData.Players: expected at least one player entry.");
+                if (players[0] is not JObject firstPlayer)
+                    throw new InvalidDataException($"{enterResponseName}.EnterResultData.WorldData.Players[0]: expected JSON object, got {players[0]!.Type}.");
+
+                AssertEqual(player.PlayerData.Id, RequiredValue<long>(firstPlayer, "Id", JTokenType.Integer, $"{enterResponseName}.EnterResultData.WorldData.Players[0]"), $"{enterResponseName} EnterResultData.WorldData.Players[0].Id");
+                AssertEqual(player.PlayerData.Name, RequiredValue<string>(firstPlayer, "Name", JTokenType.String, $"{enterResponseName}.EnterResultData.WorldData.Players[0]"), $"{enterResponseName} EnterResultData.WorldData.Players[0].Name");
+                AssertTopLevelBigWorldSelfNpcCommanderPartData(
+                    firstPlayer,
+                    $"{enterResponseName}.EnterResultData.WorldData.Players[0]",
+                    expectedCommanderParts);
+
+                AssertNestedBigWorldNativePayloadIdentityAndCommanderPartData(
+                    enterResultData,
+                    "FightData",
+                    player.PlayerData.Id,
+                    player.PlayerData.Name,
+                    fixturePlayerId,
+                    fixturePlayerName,
+                    expectedCommanderParts,
+                    enterResponseName);
+                AssertNestedBigWorldNativePayloadIdentityAndCommanderPartData(
+                    enterResultData,
+                    "LevelData",
+                    player.PlayerData.Id,
+                    player.PlayerData.Name,
+                    fixturePlayerId,
+                    fixturePlayerName,
+                    expectedCommanderParts,
+                    enterResponseName);
+
+            }
+
+            using LoopbackSessionHarness adjacentHarness = new(
+                CreateDrawCompatibilityCharacter(playerId + 1),
+                CreateDrawCompatibilityPlayer(playerId + 1),
+                CreateDrawCompatibilityInventory(playerId + 1, []),
+                "big-world-adjacent-compat-test");
+            AssertBigWorldAck(adjacentHarness, "BigWorldOnModuleLoadCompleteRequest", 12_002);
+            AssertBigWorldAck(adjacentHarness, "BigWorldSaveFovDataRequest", 12_003);
+            AssertBigWorldAck(adjacentHarness, "BigWorldTeamChangeRequest", 12_004);
+            AssertBigWorldAck(adjacentHarness, "BigWorldCheckIsShowMainRedPointRequest", 12_005);
+            AssertDlcWorldSaveData(adjacentHarness, 12_006, expectedWorldId, expectedLevelId);
+            byte[] capturedXRpcPayload = AssertLoadCompleteEmitsStartFightThenPendingBigWorldXRpc(adjacentHarness, 12_007, playerId + 1);
+            AssertXRpcAck(adjacentHarness, "XRpcCommon", "XRpcCommonResponse", 12_008, capturedXRpcPayload);
+            AssertXRpcAck(adjacentHarness, "XRpcComponentAction", "XRpcComponentActionResponse", 12_009, capturedXRpcPayload);
+            AssertXRpcPlayerInteractEmitsRetailNotifies(adjacentHarness, 12_010, playerId + 1);
+            AssertBigWorldLoginStartupPushes(playerId + 2);
+
+            static void AssertNestedBigWorldNativePayloadIdentityAndCommanderPartData(
+                JObject enterResultData,
+                string propertyName,
+                long expectedPlayerId,
+                string expectedPlayerName,
+                long fixturePlayerId,
+                string fixturePlayerName,
+                IReadOnlyList<(long PartId, long ColourId)> expectedCommanderParts,
+                string responseName)
+            {
+                string payloadPath = $"{responseName}.EnterResultData.{propertyName}";
+                if (!enterResultData.TryGetValue(propertyName, out JToken? encodedPayload))
+                    throw new InvalidDataException($"{responseName}.EnterResultData: missing JSON field '{propertyName}'.");
+
+                string encodedBytes = encodedPayload.Type switch
+                {
+                    JTokenType.Object => RequiredValue<string>((JObject)encodedPayload, "__base64_bytes__", JTokenType.String, payloadPath),
+                    JTokenType.String => encodedPayload.Value<string>()!,
+                    _ => throw new InvalidDataException($"{payloadPath}: expected JSON Object with __base64_bytes__ or base64 String, got {encodedPayload.Type}.")
+                };
+
+                byte[] payloadBytes;
+                try
+                {
+                    payloadBytes = Convert.FromBase64String(encodedBytes);
+                }
+                catch (FormatException ex)
+                {
+                    throw new InvalidDataException($"{payloadPath}.__base64_bytes__: expected base64-encoded MessagePack bytes.", ex);
+                }
+
+                JToken nestedPayload;
+                try
+                {
+                    nestedPayload = JToken.Parse(MessagePackSerializer.ConvertToJson(payloadBytes));
+                }
+                catch (Exception ex) when (ex is MessagePackSerializationException || ex is JsonException)
+                {
+                    throw new InvalidDataException($"{payloadPath}: expected __base64_bytes__ to decode to MessagePack JSON.", ex);
+                }
+
+                AssertJsonContainsInteger(nestedPayload, expectedPlayerId, $"{payloadPath} nested MessagePack JSON active session player Id");
+                AssertJsonContainsString(nestedPayload, expectedPlayerName, $"{payloadPath} nested MessagePack JSON active session player Name");
+                AssertJsonDoesNotContainInteger(nestedPayload, fixturePlayerId, $"{payloadPath} nested MessagePack JSON fixture player Id");
+                AssertJsonDoesNotContainString(nestedPayload, fixturePlayerName, $"{payloadPath} nested MessagePack JSON fixture player Name");
+                AssertNestedBigWorldCommanderPartData(nestedPayload, $"{payloadPath} nested MessagePack JSON", expectedCommanderParts);
+            }
+
+            static void AssertTopLevelBigWorldSelfNpcCommanderPartData(
+                JObject firstPlayer,
+                string firstPlayerPath,
+                IReadOnlyList<(long PartId, long ColourId)> expectedCommanderParts)
+            {
+                JArray npcList = (JArray)RequiredToken(firstPlayer, "NpcList", JTokenType.Array, firstPlayerPath);
+                if (npcList.Count == 0)
+                    throw new InvalidDataException($"{firstPlayerPath}.NpcList: expected at least one self NPC entry.");
+                if (npcList[0] is not JObject selfNpc)
+                    throw new InvalidDataException($"{firstPlayerPath}.NpcList[0]: expected JSON object, got {npcList[0]!.Type}.");
+
+                JObject partData = RequiredObject(selfNpc, "PartData", $"{firstPlayerPath}.NpcList[0]");
+                JArray partList = (JArray)RequiredToken(partData, "PartList", JTokenType.Array, $"{firstPlayerPath}.NpcList[0].PartData");
+                AssertCommanderPartListContainsFixtureCompatibleParts(partList, $"{firstPlayerPath}.NpcList[0].PartData.PartList", expectedCommanderParts);
+            }
+
+            static void AssertNestedBigWorldCommanderPartData(
+                JToken nestedPayload,
+                string payloadPath,
+                IReadOnlyList<(long PartId, long ColourId)> expectedCommanderParts)
+            {
+                List<(JArray PartList, string Path)> commanderPartLists = [];
+                List<string> observedPartDataPartLists = [];
+                CollectCommanderPartLists(nestedPayload, payloadPath, commanderPartLists, observedPartDataPartLists, expectedCommanderParts);
+                if (commanderPartLists.Count != 1)
+                {
+                    throw new InvalidDataException(
+                        $"{payloadPath} commander fixture-compatible PartData.PartList count: expected '1', got '{commanderPartLists.Count}'. " +
+                        $"Observed PartData.PartList part ids: {FormatObservedPartLists(observedPartDataPartLists)}.");
+                }
+
+                AssertCommanderPartListContainsFixtureCompatibleParts(commanderPartLists[0].PartList, commanderPartLists[0].Path, expectedCommanderParts);
+            }
+
+
+            static void CollectCommanderPartLists(
+                JToken token,
+                string path,
+                List<(JArray PartList, string Path)> commanderPartLists,
+                List<string> observedPartDataPartLists,
+                IReadOnlyList<(long PartId, long ColourId)> expectedCommanderParts)
+            {
+                if (token is JObject obj)
+                {
+                    if (TryDecodeNestedMessagePackBytes(obj, out JToken? decodedNestedPayload))
+                        CollectCommanderPartLists(decodedNestedPayload, $"{path}.__base64_bytes__", commanderPartLists, observedPartDataPartLists, expectedCommanderParts);
+
+                    bool foundPartDataPartList = TryGetPartDataPartList(obj, path, out JArray? partList, out string partListPath);
+                    if (foundPartDataPartList)
+                    {
+                        observedPartDataPartLists.Add($"{partListPath}=[{DescribePartListPartIds(partList)}]");
+                        if (PartListContainsFixtureCompatiblePartIds(partList, expectedCommanderParts))
+                            commanderPartLists.Add((partList, partListPath));
+                    }
+
+                    foreach (JProperty property in obj.Properties())
+                    {
+                        if (foundPartDataPartList && string.Equals(property.Name, "PartData", StringComparison.Ordinal))
+                            continue;
+                        CollectCommanderPartLists(property.Value, $"{path}.{property.Name}", commanderPartLists, observedPartDataPartLists, expectedCommanderParts);
+                    }
+                    return;
+                }
+
+                if (token.Type == JTokenType.String
+                    && TryDecodeNestedMessagePackString(token.Value<string>(), out JToken? decodedStringPayload))
+                {
+                    CollectCommanderPartLists(decodedStringPayload, $"{path}.__base64_string__", commanderPartLists, observedPartDataPartLists, expectedCommanderParts);
+                    return;
+                }
+
+                if (token is JArray array)
+                {
+                    for (int index = 0; index < array.Count; index++)
+                        CollectCommanderPartLists(array[index], $"{path}[{index}]", commanderPartLists, observedPartDataPartLists, expectedCommanderParts);
+                }
+            }
+
+            static bool TryGetPartDataPartList(JObject obj, string path, out JArray partList, out string partListPath)
+            {
+                if (obj.TryGetValue("PartData", out JToken? partDataToken)
+                    && partDataToken is JObject partData
+                    && partData.TryGetValue("PartList", out JToken? nestedPartListToken)
+                    && nestedPartListToken is JArray nestedPartList)
+                {
+                    partList = nestedPartList;
+                    partListPath = $"{path}.PartData.PartList";
+                    return true;
+                }
+
+                if (path.EndsWith(".PartData", StringComparison.Ordinal)
+                    && obj.TryGetValue("PartList", out JToken? partListToken)
+                    && partListToken is JArray directPartList)
+                {
+                    partList = directPartList;
+                    partListPath = $"{path}.PartList";
+                    return true;
+                }
+
+                partList = null!;
+                partListPath = string.Empty;
+                return false;
+            }
+
+            static bool TryDecodeNestedMessagePackBytes(JObject obj, out JToken decodedPayload)
+            {
+                decodedPayload = JValue.CreateNull();
+                if (!obj.TryGetValue("__base64_bytes__", out JToken? encodedPayload)
+                    || encodedPayload.Type != JTokenType.String)
+                {
+                    return false;
+                }
+
+                if (!TryDecodeNestedMessagePackString(encodedPayload.Value<string>(), out decodedPayload))
+                    throw new InvalidDataException("Expected __base64_bytes__ to contain a MessagePack payload.");
+
+                return true;
+            }
+
+            static bool TryDecodeNestedMessagePackString(string? encodedPayload, out JToken decodedPayload)
+            {
+                decodedPayload = JValue.CreateNull();
+                if (string.IsNullOrWhiteSpace(encodedPayload) || encodedPayload.Length % 4 != 0)
+                    return false;
+
+                try
+                {
+                    byte[] payloadBytes = Convert.FromBase64String(encodedPayload);
+                    decodedPayload = DecodeLeadingMessagePackJson(payloadBytes);
+                    return true;
+                }
+                catch (Exception exception) when (exception is FormatException or MessagePackSerializationException or JsonException or InvalidOperationException)
+                {
+                    decodedPayload = JValue.CreateNull();
+                    return false;
+                }
+            }
+
+            static JToken DecodeLeadingMessagePackJson(byte[] payloadBytes)
+            {
+                MessagePackReader reader = new(new System.Buffers.ReadOnlySequence<byte>(payloadBytes));
+                reader.Skip();
+                int consumed = checked((int)reader.Consumed);
+                if (consumed <= 0)
+                    throw new InvalidDataException("Expected a leading MessagePack value.");
+                return JToken.Parse(MessagePackSerializer.ConvertToJson(payloadBytes.AsMemory(0, consumed).ToArray()));
+            }
+
+            static string FormatObservedPartLists(List<string> observedPartDataPartLists)
+            {
+                if (observedPartDataPartLists.Count == 0)
+                    return "<none>";
+
+                int limit = Math.Min(5, observedPartDataPartLists.Count);
+                StringBuilder builder = new();
+                for (int index = 0; index < limit; index++)
+                {
+                    if (index > 0)
+                        builder.Append("; ");
+                    builder.Append(observedPartDataPartLists[index]);
+                }
+
+                if (observedPartDataPartLists.Count > limit)
+                    builder.Append($"; ... {observedPartDataPartLists.Count - limit} more");
+                return builder.ToString();
+            }
+
+            static string DescribePartListPartIds(JArray partList)
+            {
+                StringBuilder builder = new();
+                int observedPartIds = 0;
+                foreach (JToken part in partList)
+                {
+                    if (part is not JObject partObject
+                        || !partObject.TryGetValue("PartId", out JToken? partId)
+                        || partId.Type != JTokenType.Integer)
+                    {
+                        continue;
+                    }
+
+                    if (observedPartIds > 0)
+                        builder.Append(", ");
+                    if (observedPartIds == 8)
+                    {
+                        builder.Append("...");
+                        break;
+                    }
+
+                    builder.Append(partId.Value<long>());
+                    observedPartIds++;
+                }
+
+                return observedPartIds == 0 ? "<no integer PartId values>" : builder.ToString();
+            }
+
+            static bool PartListContainsFixtureCompatiblePartIds(JArray partList, IReadOnlyList<(long PartId, long ColourId)> expectedCommanderParts)
+            {
+                foreach ((long partId, _) in expectedCommanderParts)
+                {
+                    if (!PartListContainsPartId(partList, partId))
+                        return false;
+                }
+
+                return true;
+            }
+
+            static bool PartListContainsPartId(JArray partList, long expectedPartId)
+            {
+                foreach (JToken part in partList)
+                {
+                    if (part is JObject partObject
+                        && partObject.TryGetValue("PartId", out JToken? partId)
+                        && partId.Type == JTokenType.Integer
+                        && partId.Value<long>() == expectedPartId)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
+            static void AssertCommanderPartListContainsFixtureCompatibleParts(
+                JArray partList,
+                string partListPath,
+                IReadOnlyList<(long PartId, long ColourId)> expectedCommanderParts)
+            {
+                foreach ((long expectedPartId, long expectedColourId) in expectedCommanderParts)
+                {
+                    JObject part = AssertPartListContainsPart(partList, partListPath, expectedPartId);
+                    AssertEqual(expectedColourId, RequiredValue<long>(part, "ColourId", JTokenType.Integer, $"{partListPath}[PartId={expectedPartId}]"), $"{partListPath} PartId {expectedPartId} ColourId");
+                }
+            }
+
+            static JObject AssertPartListContainsPart(JArray partList, string partListPath, long expectedPartId)
+            {
+                for (int index = 0; index < partList.Count; index++)
+                {
+                    if (partList[index] is not JObject part)
+                        throw new InvalidDataException($"{partListPath}[{index}]: expected JSON object, got {partList[index]!.Type}.");
+
+                    if (RequiredValue<long>(part, "PartId", JTokenType.Integer, $"{partListPath}[{index}]") == expectedPartId)
+                        return part;
+                }
+
+                throw new InvalidDataException($"{partListPath}: expected commander fixture-compatible PartId {expectedPartId}.");
+            }
+
+            static (long PlayerId, string PlayerName, long PlayerGender, IReadOnlyList<(long PartId, long ColourId)> CommanderParts) ReadBigWorldEnterFixtureExpectations()
+            {
+                byte[] fixturePayload;
+                try
+                {
+                    string encodedPayload = File.ReadAllText(ResourcePath("Configs", "big_world_enter_world_response.msgpack.b64")).Trim();
+                    fixturePayload = Convert.FromBase64String(encodedPayload);
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is FormatException)
+                {
+                    throw new InvalidDataException("BigWorld enter-world fixture expectations: expected readable base64 MessagePack fixture.", ex);
+                }
+
+                JObject fixtureResponse;
+                try
+                {
+                    fixtureResponse = JObject.Parse(MessagePackSerializer.ConvertToJson(fixturePayload));
+                }
+                catch (Exception ex) when (ex is MessagePackSerializationException || ex is JsonException)
+                {
+                    throw new InvalidDataException("BigWorld enter-world fixture expectations: expected fixture bytes to decode to MessagePack JSON.", ex);
+                }
+
+                JObject enterResultData = RequiredObject(fixtureResponse, "EnterResultData", "BigWorld enter-world fixture");
+                JObject worldData = RequiredObject(enterResultData, "WorldData", "BigWorld enter-world fixture.EnterResultData");
+                JArray players = (JArray)RequiredToken(worldData, "Players", JTokenType.Array, "BigWorld enter-world fixture.EnterResultData.WorldData");
+                if (players.Count == 0)
+                    throw new InvalidDataException("BigWorld enter-world fixture.EnterResultData.WorldData.Players: expected at least one fixture player.");
+                if (players[0] is not JObject firstFixturePlayer)
+                    throw new InvalidDataException($"BigWorld enter-world fixture.EnterResultData.WorldData.Players[0]: expected JSON object, got {players[0]!.Type}.");
+
+                JObject playerData = RequiredObject(fixtureResponse, "PlayerData", "BigWorld enter-world fixture");
+                long currentCommanderOutfitType = RequiredValue<long>(playerData, "CurCommanderOutfitType", JTokenType.Integer, "BigWorld enter-world fixture.PlayerData");
+                JObject commanderFashionOutfits = RequiredObject(playerData, "CommanderFashionOutfits", "BigWorld enter-world fixture.PlayerData");
+                string currentCommanderOutfitKey = currentCommanderOutfitType.ToString();
+                JObject currentCommanderOutfit = RequiredObject(commanderFashionOutfits, currentCommanderOutfitKey, "BigWorld enter-world fixture.PlayerData.CommanderFashionOutfits");
+                JObject wearFashionDict = RequiredObject(currentCommanderOutfit, "WearFashionDict", $"BigWorld enter-world fixture.PlayerData.CommanderFashionOutfits[{currentCommanderOutfitKey}]");
+                List<(long PartId, long ColourId)> commanderParts = [];
+                foreach (JProperty fashionEntry in wearFashionDict.Properties())
+                {
+                    if (fashionEntry.Value is not JObject fashionPart)
+                        throw new InvalidDataException($"BigWorld enter-world fixture.PlayerData.CommanderFashionOutfits[{currentCommanderOutfitKey}].WearFashionDict[{fashionEntry.Name}]: expected JSON object, got {fashionEntry.Value.Type}.");
+
+                    commanderParts.Add((
+                        RequiredValue<long>(fashionPart, "PartId", JTokenType.Integer, $"BigWorld enter-world fixture.PlayerData.CommanderFashionOutfits[{currentCommanderOutfitKey}].WearFashionDict[{fashionEntry.Name}]"),
+                        RequiredValue<long>(fashionPart, "ColourId", JTokenType.Integer, $"BigWorld enter-world fixture.PlayerData.CommanderFashionOutfits[{currentCommanderOutfitKey}].WearFashionDict[{fashionEntry.Name}]")));
+                }
+
+                if (commanderParts.Count == 0)
+                    throw new InvalidDataException($"BigWorld enter-world fixture.PlayerData.CommanderFashionOutfits[{currentCommanderOutfitKey}].WearFashionDict: expected at least one commander fashion part.");
+
+                return (
+                    RequiredValue<long>(firstFixturePlayer, "Id", JTokenType.Integer, "BigWorld enter-world fixture.EnterResultData.WorldData.Players[0]"),
+                    RequiredValue<string>(firstFixturePlayer, "Name", JTokenType.String, "BigWorld enter-world fixture.EnterResultData.WorldData.Players[0]"),
+                    RequiredValue<long>(playerData, "Gender", JTokenType.Integer, "BigWorld enter-world fixture.PlayerData"),
+                    commanderParts);
+            }
+
+
+            static void AssertJsonContainsInteger(JToken payload, long expectedValue, string name)
+            {
+                if (!JsonContainsInteger(payload, expectedValue))
+                    throw new InvalidDataException($"{name}: expected an integer value equal to {expectedValue}.");
+            }
+
+            static void AssertJsonContainsString(JToken payload, string expectedValue, string name)
+            {
+                if (!JsonContainsString(payload, expectedValue))
+                    throw new InvalidDataException($"{name}: expected a string value equal to '{expectedValue}'.");
+            }
+
+            static void AssertJsonDoesNotContainInteger(JToken payload, long forbiddenValue, string name)
+            {
+                if (JsonContainsInteger(payload, forbiddenValue))
+                    throw new InvalidDataException($"{name}: must not contain integer value {forbiddenValue}.");
+            }
+
+            static void AssertJsonDoesNotContainString(JToken payload, string forbiddenValue, string name)
+            {
+                if (JsonContainsString(payload, forbiddenValue))
+                    throw new InvalidDataException($"{name}: must not contain string value '{forbiddenValue}'.");
+            }
+
+            static bool JsonContainsInteger(JToken token, long expectedValue)
+            {
+                if (token.Type == JTokenType.Integer && token.Value<long>() == expectedValue)
+                    return true;
+
+                foreach (JToken child in token.Children())
+                {
+                    if (JsonContainsInteger(child, expectedValue))
+                        return true;
+                }
+
+                return false;
+            }
+
+            static bool JsonContainsString(JToken token, string expectedValue)
+            {
+                if (token.Type == JTokenType.String && string.Equals(token.Value<string>(), expectedValue, StringComparison.Ordinal))
+                    return true;
+
+                foreach (JToken child in token.Children())
+                {
+                    if (JsonContainsString(child, expectedValue))
+                        return true;
+                }
+
+                return false;
+            }
+
+            static JObject ReadBigWorldEnterWorldResponseWithPushes(
+                LoopbackSessionHarness harness,
+                int expectedPacketId,
+                string expectedResponseName)
+            {
+                JObject? responsePayload = null;
+                List<string> packetNames = [];
+                List<string> pushNames = [];
+                Dictionary<string, byte[]> pushContentsByName = new(StringComparer.Ordinal);
+
+                for (int packetIndex = 0; packetIndex < 4; packetIndex++)
+                {
+                    Packet packet = harness.ReadPacket($"{expectedResponseName} response/push packet {packetIndex + 1}");
+                    switch (packet.Type)
+                    {
+                        case Packet.ContentType.Response:
+                            if (responsePayload is not null)
+                                throw new InvalidDataException($"{expectedResponseName}: expected one response packet, got a second response.");
+                            Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+                            AssertEqual(expectedPacketId, response.Id, $"{expectedResponseName} packet id");
+                            AssertEqual(expectedResponseName, response.Name, $"{expectedResponseName} packet name");
+                            responsePayload = JObject.Parse(MessagePackSerializer.ConvertToJson(response.Content));
+                            packetNames.Add(response.Name);
+                            break;
+                        case Packet.ContentType.Push:
+                            Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                            packetNames.Add(push.Name);
+                            pushNames.Add(push.Name);
+                            pushContentsByName.TryAdd(push.Name, push.Content);
+                            break;
+                        default:
+                            throw new InvalidDataException($"{expectedResponseName}: expected only response/push packets, got {packet.Type}.");
+                    }
+                }
+
+                if (responsePayload is null)
+                    throw new InvalidDataException($"{expectedResponseName}: expected a response packet around BigWorld startup pushes.");
+
+                string[] expectedPushNames =
+                [
+                    "NotifyBigWorldAlbumUpdate",
+                    "NotifyBigWorldMapData",
+                    "NotifySgDormData"
+                ];
+                AssertEqual(3, pushNames.Count, $"{expectedResponseName} BigWorld enter push count");
+                AssertEqual(expectedResponseName, packetNames[0], $"{expectedResponseName} first packet");
+                for (int pushIndex = 0; pushIndex < expectedPushNames.Length; pushIndex++)
+                {
+                    AssertEqual(expectedPushNames[pushIndex], pushNames[pushIndex], $"{expectedResponseName} enter push order {pushIndex + 1}");
+                    AssertEqual(expectedPushNames[pushIndex], packetNames[pushIndex + 1], $"{expectedResponseName} response/push packet order {pushIndex + 2}");
+                }
+
+                if (!pushContentsByName.TryGetValue("NotifyBigWorldAlbumUpdate", out byte[]? albumUpdateContent))
+                    throw new InvalidDataException($"{expectedResponseName}: expected NotifyBigWorldAlbumUpdate content.");
+                AssertEqual(60, albumUpdateContent.Length, "NotifyBigWorldAlbumUpdate raw payload length");
+
+                if (!pushContentsByName.TryGetValue("NotifyBigWorldMapData", out byte[]? mapDataContent))
+                    throw new InvalidDataException($"{expectedResponseName}: expected NotifyBigWorldMapData content.");
+                AssertEqual(25, mapDataContent.Length, "NotifyBigWorldMapData raw payload length");
+                JObject mapData = JObject.Parse(MessagePackSerializer.ConvertToJson(mapDataContent));
+                JObject boxRewardedCntData = RequiredObject(mapData, "BoxRewardedCntData", "NotifyBigWorldMapData");
+                AssertEqual(3L, RequiredValue<long>(boxRewardedCntData, "4001", JTokenType.Integer, "NotifyBigWorldMapData.BoxRewardedCntData"), "NotifyBigWorldMapData BoxRewardedCntData[4001]");
+
+                if (!pushContentsByName.TryGetValue("NotifySgDormData", out byte[]? dormDataContent))
+                    throw new InvalidDataException($"{expectedResponseName}: expected NotifySgDormData content.");
+                AssertEqual(388, dormDataContent.Length, "NotifySgDormData raw payload length");
+                return responsePayload;
+            }
+
+
+            static void AssertDlcWorldSaveData(
+                LoopbackSessionHarness harness,
+                int packetId,
+                int expectedWorldId,
+                int expectedLevelId)
+            {
+                const string requestName = "DlcWorldSaveDataRequest";
+                const string responseName = "DlcWorldSaveDataResponse";
+                Type requestType = RequiredPayloadType(requestName);
+                _ = RequiredPayloadType(responseName);
+                object request = Activator.CreateInstance(requestType)
+                    ?? throw new InvalidDataException($"{requestName}: expected a public parameterless constructor.");
+                SetRequiredIntegerMember(request, "WorldId", expectedWorldId);
+
+                InvokeRegisteredRequestHandler(requestName, harness.Session, packetId, request);
+
+                Packet responsePacket = harness.ReadPacket($"{requestName} response packet");
+                AssertEqual(Packet.ContentType.Response, responsePacket.Type, $"{requestName} response packet type");
+                Packet.Response packetResponse = MessagePackSerializer.Deserialize<Packet.Response>(responsePacket.Content);
+                AssertEqual(packetId, packetResponse.Id, $"{responseName} packet id");
+                AssertEqual(responseName, packetResponse.Name, $"{responseName} packet name");
+                byte[] rawResponseContent = packetResponse.Content;
+                AssertEqual(9_730, rawResponseContent.Length, $"{responseName} raw payload length");
+                JObject response = JObject.Parse(MessagePackSerializer.ConvertToJson(rawResponseContent));
+
+                AssertEqual(0L, RequiredValue<long>(response, "Code", JTokenType.Integer, $"{responseName}"), $"{responseName} Code");
+                JObject worldSaveData = RequiredObject(response, "WorldSaveData", responseName);
+                JObject levelDataDict = RequiredObject(worldSaveData, "LevelDataDict", $"{responseName}.WorldSaveData");
+                JObject levelData = RequiredObject(levelDataDict, expectedLevelId.ToString(), $"{responseName}.WorldSaveData.LevelDataDict");
+                AssertEqual((long)expectedWorldId, RequiredValue<long>(levelData, "WorldId", JTokenType.Integer, $"{responseName}.WorldSaveData.LevelDataDict[{expectedLevelId}]"), $"{responseName} LevelDataDict[{expectedLevelId}].WorldId");
+                AssertEqual((long)expectedLevelId, RequiredValue<long>(levelData, "LevelId", JTokenType.Integer, $"{responseName}.WorldSaveData.LevelDataDict[{expectedLevelId}]"), $"{responseName} LevelDataDict[{expectedLevelId}].LevelId");
+                if (harness.TryReadAvailablePacket($"{requestName} unexpected packet before LoadCompleteRequest", out Packet extraPacket))
+                {
+                    string extraPacketDetail = extraPacket.Type.ToString();
+                    if (extraPacket.Type == Packet.ContentType.Push)
+                    {
+                        Packet.Push extraPush = MessagePackSerializer.Deserialize<Packet.Push>(extraPacket.Content);
+                        extraPacketDetail = $"{extraPacket.Type} {extraPush.Name}";
+                    }
+
+                    throw new InvalidDataException($"{requestName}: expected only {responseName} before LoadCompleteRequest; StartFightNotify must wait for LoadCompleteRequest, got {extraPacketDetail} packet.");
+                }
+            }
+
+            static byte[] AssertLoadCompleteEmitsStartFightThenPendingBigWorldXRpc(
+                LoopbackSessionHarness harness,
+                int packetId,
+                long expectedPlayerId)
+            {
+                const string requestName = "LoadCompleteRequest";
+                const string responseName = "LoadCompleteResponse";
+                Type requestType = RequiredPayloadType(requestName);
+                Type responseType = RequiredPayloadType(responseName);
+                object request = Activator.CreateInstance(requestType)
+                    ?? throw new InvalidDataException($"{requestName}: expected a public parameterless constructor.");
+
+                InvokeRegisteredRequestHandler(requestName, harness.Session, packetId, request);
+
+                Packet startFightPacket = harness.ReadPacket($"{requestName} StartFightNotify push");
+                AssertEqual(Packet.ContentType.Push, startFightPacket.Type, $"{requestName} StartFightNotify packet type");
+                Packet.Push startFightPush = MessagePackSerializer.Deserialize<Packet.Push>(startFightPacket.Content);
+                AssertEqual("StartFightNotify", startFightPush.Name, $"{requestName} StartFightNotify packet name");
+                JObject startFightPayload = JObject.Parse(MessagePackSerializer.ConvertToJson(startFightPush.Content));
+                AssertEqual(0L, RequiredValue<long>(startFightPayload, "Code", JTokenType.Integer, "StartFightNotify"), "StartFightNotify Code after LoadCompleteRequest");
+
+                Packet responsePacket = harness.ReadPacket($"{requestName} response");
+                AssertEqual(Packet.ContentType.Response, responsePacket.Type, $"{requestName} response packet type");
+                Packet.Response packetResponse = MessagePackSerializer.Deserialize<Packet.Response>(responsePacket.Content);
+                AssertEqual(packetId, packetResponse.Id, $"{responseName} packet id");
+                AssertEqual(responseName, packetResponse.Name, $"{responseName} packet name");
+                object response = MessagePackDeserialize(responseType, packetResponse.Content)
+                    ?? throw new InvalidDataException($"{responseName}: expected a response payload.");
+                AssertEqual(0, GetRequiredIntegerMember(response, "Code"), $"{responseName} Code");
+
+                string[] expectedMethods =
+                [
+                    "RpcEcologyConstructClearStateUpdateNotify",
+                    "RpcBeginCheckRLObjectCompleted",
+                    "RpcAddQuestNavPointForLevelSceneObject",
+                    "RpcSetCombatState",
+                    "RpcBeginUpdateLevel"
+                ];
+                List<string> observedMethods = [];
+                byte[]? firstXRpcPayload = null;
+
+                for (int pushIndex = 0; pushIndex < expectedMethods.Length; pushIndex++)
+                {
+                    Packet pushPacket = harness.ReadPacket($"{requestName} XRpcCommon push {pushIndex + 1}");
+                    AssertEqual(Packet.ContentType.Push, pushPacket.Type, $"{requestName} XRpcCommon push {pushIndex + 1} packet type");
+                    Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(pushPacket.Content);
+                    AssertEqual("XRpcCommon", push.Name, $"{requestName} XRpcCommon push {pushIndex + 1} packet name");
+                    firstXRpcPayload ??= push.Content;
+
+                    object?[] rpc = DeserializeXRpcList(push.Content, $"{requestName} XRpcCommon push {pushIndex + 1}");
+                    string methodName = RequiredXRpcMethodName(rpc, $"{requestName} XRpcCommon push {pushIndex + 1}");
+                    observedMethods.Add(methodName);
+                    AssertEqual(expectedMethods[pushIndex], methodName, $"{requestName} XRpcCommon method order {pushIndex + 1}");
+
+                    if (methodName == "RpcSetCombatState")
+                    {
+                        byte[] argsPayload = RequiredXRpcArgsPayload(rpc, $"{requestName} RpcSetCombatState");
+                        Dictionary<string, object?> args = DeserializeXRpcArgs(argsPayload, $"{requestName} RpcSetCombatState args");
+                        AssertEqual(expectedPlayerId, RequiredXRpcInteger(args, "PlayerId", $"{requestName} RpcSetCombatState args"), $"{requestName} RpcSetCombatState PlayerId");
+                        AssertXRpcMapIntegerValueDoesNotUseInt64Marker(argsPayload, "PlayerId", $"{requestName} RpcSetCombatState args");
+                        AssertEqual(false, RequiredXRpcBoolean(args, "IsInCombat", $"{requestName} RpcSetCombatState args"), $"{requestName} RpcSetCombatState IsInCombat");
+                    }
+                }
+
+                if (!observedMethods.SequenceEqual(expectedMethods))
+                    throw new InvalidDataException($"{requestName} XRpcCommon method list: expected {string.Join(" -> ", expectedMethods)}, got {string.Join(" -> ", observedMethods)}.");
+                if (harness.TryReadAvailablePacket($"{requestName} unexpected packet after XRpcCommon bootstrap", out Packet extraPacket))
+                    throw new InvalidDataException($"{requestName}: expected exactly five XRpcCommon pushes after {responseName}, got extra {extraPacket.Type} packet.");
+
+                return firstXRpcPayload
+                    ?? throw new InvalidDataException($"{requestName}: expected at least one captured XRpc payload.");
+            }
+
+            static void AssertXRpcAck(
+                LoopbackSessionHarness harness,
+                string requestName,
+                string responseName,
+                int packetId,
+                byte[] capturedCompatibleListPayload)
+            {
+                Type responseType = RequiredPayloadType(responseName);
+                _ = DeserializeXRpcList(capturedCompatibleListPayload, $"{requestName} captured-compatible request payload");
+                InvokeRegisteredRequestHandlerWithContent(requestName, harness.Session, packetId, capturedCompatibleListPayload);
+                object response = ReadResponsePayload(
+                    harness,
+                    packetId,
+                    responseName,
+                    $"{requestName} response",
+                    responseType,
+                    maxPacketsToRead: 1);
+                AssertEqual(0, GetRequiredIntegerMember(response, "Code"), $"{responseName} Code");
+            }
+
+            static void AssertXRpcPlayerInteractEmitsRetailNotifies(
+                LoopbackSessionHarness harness,
+                int packetId,
+                long playerId)
+            {
+                const string requestName = "XRpcCommon RpcPlayerInteractRequest";
+                byte[] argsPayload = MessagePackSerializer.Serialize(new object?[]
+                {
+                    checked((int)playerId),
+                    1,
+                    991,
+                    95,
+                    100016,
+                    2,
+                    4001,
+                    1
+                });
+                byte[] requestPayload = MessagePackSerializer.Serialize(new object?[]
+                {
+                    "RpcPlayerInteractRequest",
+                    argsPayload,
+                    1,
+                    15,
+                    4001
+                });
+
+                InvokeRegisteredRequestHandlerWithContent("XRpcCommon", harness.Session, packetId, requestPayload);
+                AssertXRpcCommonPushArgs(
+                    harness,
+                    "RpcNpcInteractStartNotify",
+                    [95, 100016, 2, 1],
+                    $"{requestName} start notify",
+                    "95b95270634e7063496e74657261637453746172744e6f74696679c409945fce000186b00201010f00");
+                AssertXRpcCommonPushArgs(
+                    harness,
+                    "RpcNpcInteractFinishNotify",
+                    [],
+                    $"{requestName} finish notify",
+                    "95ba5270634e7063496e74657261637446696e6973684e6f74696679c40190010f00");
+
+                Type responseType = RequiredPayloadType("XRpcCommonResponse");
+                object response = ReadResponsePayload(
+                    harness,
+                    packetId,
+                    "XRpcCommonResponse",
+                    $"{requestName} response",
+                    responseType,
+                    maxPacketsToRead: 1);
+                AssertEqual(0, GetRequiredIntegerMember(response, "Code"), $"{requestName} response Code");
+                if (harness.TryReadAvailablePacket($"{requestName} unexpected packet after response", out Packet extraPacket))
+                    throw new InvalidDataException($"{requestName}: expected exactly start notify, finish notify, and response; got extra {DescribePacket(extraPacket)}.");
+            }
+
+            static void AssertXRpcCommonPushArgs(
+                LoopbackSessionHarness harness,
+                string expectedMethodName,
+                IReadOnlyList<long> expectedArgs,
+                string name,
+                string? expectedPayloadHex = null)
+            {
+                Packet packet = harness.ReadPacket($"{name} packet");
+                AssertEqual(Packet.ContentType.Push, packet.Type, $"{name} packet type");
+                Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                AssertEqual("XRpcCommon", push.Name, $"{name} packet name");
+                AssertXRpcCommonEnvelopeTailIsClientReadable(push.Content, name);
+                if (expectedPayloadHex is not null)
+                    AssertEqual(expectedPayloadHex, Convert.ToHexString(push.Content).ToLowerInvariant(), $"{name} retail payload hex");
+
+                object?[] rpc = DeserializeXRpcList(push.Content, name);
+                AssertEqual(expectedMethodName, RequiredXRpcMethodName(rpc, name), $"{name} method name");
+                byte[] argsPayload = RequiredXRpcArgsPayload(rpc, $"{name} args payload");
+                object?[] args = DeserializeXRpcArgsList(argsPayload, $"{name} args");
+                AssertEqual(expectedArgs.Count, args.Length, $"{name} args count");
+                for (int argIndex = 0; argIndex < expectedArgs.Count; argIndex++)
+                {
+                    AssertEqual(
+                        expectedArgs[argIndex],
+                        RequiredXRpcListInteger(args, argIndex, $"{name} args"),
+                        $"{name} args[{argIndex}]");
+                }
+            }
+
+            static void AssertXRpcCommonEnvelopeTailIsClientReadable(byte[] payload, string name)
+            {
+                MessagePackReader reader = new(new System.Buffers.ReadOnlySequence<byte>(payload));
+                try
+                {
+                    int fieldCount = reader.ReadArrayHeader();
+                    AssertEqual(5, fieldCount, $"{name} XRpcCommon envelope field count");
+                    _ = reader.ReadString();
+                    _ = reader.ReadBytes();
+                    byte controllerId = reader.ReadByte();
+                    byte opcode = reader.ReadByte();
+                    byte levelId = reader.ReadByte();
+                    AssertEqual(1, controllerId, $"{name} XRpcCommon controller id");
+                    AssertEqual(15, opcode, $"{name} XRpcCommon opcode");
+                    AssertEqual(0, levelId, $"{name} XRpcCommon level id");
+                    AssertEqual(payload.Length, checked((int)reader.Consumed), $"{name} XRpcCommon envelope consumed bytes");
+                }
+                catch (Exception exception) when (exception is not InvalidDataException)
+                {
+                    throw new InvalidDataException($"{name}: expected XRpcCommon envelope tail to use client-readable byte fields.", exception);
+                }
+            }
+
+            static string DescribePacket(Packet packet)
+            {
+                if (packet.Type == Packet.ContentType.Push)
+                {
+                    Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                    return $"{packet.Type} {push.Name}";
+                }
+
+                if (packet.Type == Packet.ContentType.Response)
+                {
+                    Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+                    return $"{packet.Type} {response.Name}";
+                }
+
+                return packet.Type.ToString();
+            }
+
+            static void InvokeRegisteredRequestHandlerWithContent(
+                string requestName,
+                Session session,
+                int packetId,
+                byte[] content)
+            {
+                RequestPacketHandlerDelegate handler = GetRegisteredRequestHandler(requestName);
+                Packet.Request packet = new()
+                {
+                    Id = packetId,
+                    Name = requestName,
+                    Content = content
+                };
+
+                try
+                {
+                    handler.Invoke(session, packet);
+                }
+                catch (Exception exception)
+                {
+                    throw new InvalidDataException($"{requestName}: registered handler invocation failed.", exception);
+                }
+            }
+
+            static object?[] DeserializeXRpcList(byte[] payload, string name)
+            {
+                try
+                {
+                    object?[] rpc = MessagePackSerializer.Deserialize<object?[]>(payload);
+                    if (rpc.Length == 0)
+                        throw new InvalidDataException($"{name}: expected a non-empty MessagePack list payload.");
+                    return rpc;
+                }
+                catch (Exception exception) when (exception is not InvalidDataException)
+                {
+                    throw new InvalidDataException($"{name}: expected a MessagePack list payload.", exception);
+                }
+            }
+
+            static string RequiredXRpcMethodName(object?[] rpc, string name)
+            {
+                if (rpc[0] is not string methodName || string.IsNullOrWhiteSpace(methodName))
+                    throw new InvalidDataException($"{name}: expected list[0] to be a non-empty XRpc method name.");
+                return methodName;
+            }
+
+            static byte[] RequiredXRpcArgsPayload(object?[] rpc, string name)
+            {
+                if (rpc.Length < 2)
+                    throw new InvalidDataException($"{name}: expected a list[1] MessagePack args payload.");
+                if (rpc[1] is not byte[] argsPayload)
+                    throw new InvalidDataException($"{name}: expected list[1] to be MessagePack bytes, got {rpc[1]?.GetType().FullName ?? "null"}.");
+                return argsPayload;
+            }
+
+            static void AssertXRpcMapIntegerValueDoesNotUseInt64Marker(byte[] payload, string memberName, string name)
+            {
+                MessagePackReader reader = new(new System.Buffers.ReadOnlySequence<byte>(payload));
+                int fieldCount;
+                try
+                {
+                    fieldCount = reader.ReadMapHeader();
+                }
+                catch (Exception exception) when (exception is MessagePackSerializationException or InvalidOperationException)
+                {
+                    throw new InvalidDataException($"{name}: expected MessagePack map args while checking {memberName} integer marker.", exception);
+                }
+
+                for (int fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++)
+                {
+                    if (reader.NextMessagePackType != MessagePackType.String)
+                        throw new InvalidDataException($"{name}: expected string key at map field {fieldIndex} while checking {memberName} integer marker.");
+
+                    string? key = reader.ReadString();
+                    if (string.Equals(key, memberName, StringComparison.Ordinal))
+                    {
+                        int markerOffset = checked((int)reader.Consumed);
+                        if ((uint)markerOffset >= (uint)payload.Length)
+                            throw new InvalidDataException($"{name}.{memberName}: missing MessagePack value marker.");
+
+                        byte marker = payload[markerOffset];
+                        if (marker is 0xD3 or 0xCF)
+                            throw new InvalidDataException($"{name}.{memberName}: expected client-compatible int32 MessagePack encoding, got {(marker == 0xD3 ? "int64" : "uint64")} marker 0x{marker:X2}.");
+                        if (reader.NextMessagePackType != MessagePackType.Integer)
+                            throw new InvalidDataException($"{name}.{memberName}: expected integer value marker, got {reader.NextMessagePackType} marker 0x{marker:X2}.");
+
+                        reader.Skip();
+                        return;
+                    }
+
+                    reader.Skip();
+                }
+
+                throw new InvalidDataException($"{name}: expected {memberName} while checking integer marker.");
+            }
+
+            static Dictionary<string, object?> DeserializeXRpcArgs(byte[] payload, string name)
+            {
+                try
+                {
+                    return MessagePackSerializer.Deserialize<Dictionary<string, object?>>(payload);
+                }
+                catch (Exception exception) when (exception is not InvalidDataException)
+                {
+                    throw new InvalidDataException($"{name}: expected MessagePack map args.", exception);
+                }
+            }
+
+            static object?[] DeserializeXRpcArgsList(byte[] payload, string name)
+            {
+                try
+                {
+                    return MessagePackSerializer.Deserialize<object?[]>(payload);
+                }
+                catch (Exception exception) when (exception is not InvalidDataException)
+                {
+                    throw new InvalidDataException($"{name}: expected MessagePack array args.", exception);
+                }
+            }
+
+            static long RequiredXRpcListInteger(IReadOnlyList<object?> args, int index, string name)
+            {
+                if ((uint)index >= (uint)args.Count)
+                    throw new InvalidDataException($"{name}: expected args[{index}].");
+
+                return args[index] switch
+                {
+                    byte typed => typed,
+                    sbyte typed => typed,
+                    short typed => typed,
+                    ushort typed => typed,
+                    int typed => typed,
+                    uint typed => typed,
+                    long typed => typed,
+                    ulong typed when typed <= long.MaxValue => (long)typed,
+                    _ => throw new InvalidDataException($"{name}[{index}]: expected integer, got {args[index]?.GetType().FullName ?? "null"}.")
+                };
+            }
+
+            static long RequiredXRpcInteger(IReadOnlyDictionary<string, object?> args, string memberName, string name)
+            {
+                if (!args.TryGetValue(memberName, out object? value))
+                    throw new InvalidDataException($"{name}: expected {memberName}.");
+
+                return value switch
+                {
+                    byte typed => typed,
+                    sbyte typed => typed,
+                    short typed => typed,
+                    ushort typed => typed,
+                    int typed => typed,
+                    uint typed => typed,
+                    long typed => typed,
+                    ulong typed when typed <= long.MaxValue => (long)typed,
+                    _ => throw new InvalidDataException($"{name}.{memberName}: expected integer, got {value?.GetType().FullName ?? "null"}.")
+                };
+            }
+
+            static bool RequiredXRpcBoolean(IReadOnlyDictionary<string, object?> args, string memberName, string name)
+            {
+                if (!args.TryGetValue(memberName, out object? value))
+                    throw new InvalidDataException($"{name}: expected {memberName}.");
+                if (value is not bool typed)
+                    throw new InvalidDataException($"{name}.{memberName}: expected boolean, got {value?.GetType().FullName ?? "null"}.");
+                return typed;
+            }
+
+            static void AssertBigWorldLoginStartupPushes(long playerId)
+            {
+                using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForShopCompatibility();
+                Type accountModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule");
+                MethodInfo doLogin = RequiredMethod(
+                    accountModule,
+                    "DoLogin",
+                    BindingFlags.Static | BindingFlags.NonPublic,
+                    [typeof(Session)]);
+
+                AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+                player.PlayerData.Gender = 2;
+                AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
+                character.Characters.Add(CreateLoginAccountCompatibilityCharacter(1021001, fashionId: 3021001));
+                using LoopbackSessionHarness harness = new(
+                    character,
+                    player,
+                    CreateDrawCompatibilityInventory(playerId, []),
+                    "big-world-login-startup-compat-test");
+                harness.Session.stage = CreateLoginAccountCompatibilityStage(playerId);
+
+                doLogin.Invoke(null, [harness.Session]);
+                Dictionary<string, Packet.Push> pushesByName = ReadStartupPushesByNameUntil(
+                    harness,
+                    ["NotifyBigWorldMainRedPoint", "NotifyExternalRequiredBigWorldPlayerData"],
+                    maxStartupPushes: 192,
+                    "AccountModule.DoLogin BigWorld startup pushes");
+
+                _ = DeserializePushMap(
+                    pushesByName,
+                    "NotifyBigWorldMainRedPoint",
+                    "AccountModule.DoLogin NotifyBigWorldMainRedPoint startup payload");
+                JObject externalData = DeserializePushMap(
+                    pushesByName,
+                    "NotifyExternalRequiredBigWorldPlayerData",
+                    "AccountModule.DoLogin NotifyExternalRequiredBigWorldPlayerData startup payload");
+                AssertIntegerList(
+                    [],
+                    RequiredJsonIntegerArray(externalData, "EnteredBigWorldIds", "AccountModule.DoLogin NotifyExternalRequiredBigWorldPlayerData startup payload"),
+                    "NotifyExternalRequiredBigWorldPlayerData EnteredBigWorldIds");
+
+                IReadOnlyList<long> commanderFashionBags = RequiredJsonIntegerArray(
+                    externalData,
+                    "CommanderFashionBags",
+                    "AccountModule.DoLogin NotifyExternalRequiredBigWorldPlayerData startup payload");
+                if (commanderFashionBags.Count == 0)
+                    throw new InvalidDataException("NotifyExternalRequiredBigWorldPlayerData CommanderFashionBags: expected retail commander fashion bags.");
+                if (commanderFashionBags.Any(bagId => bagId <= 0))
+                    throw new InvalidDataException("NotifyExternalRequiredBigWorldPlayerData CommanderFashionBags: expected positive fashion bag ids.");
+
+                long gender = RequiredValue<long>(
+                    externalData,
+                    "Gender",
+                    JTokenType.Integer,
+                    "AccountModule.DoLogin NotifyExternalRequiredBigWorldPlayerData startup payload");
+                AssertEqual(1L, gender, "NotifyExternalRequiredBigWorldPlayerData Gender fixture-compatible value despite session gender 2");
+            }
+
+            static Dictionary<string, Packet.Push> ReadStartupPushesByNameUntil(
+                LoopbackSessionHarness harness,
+                IReadOnlyList<string> requiredPushNames,
+                int maxStartupPushes,
+                string name)
+            {
+                HashSet<string> requiredPushes = requiredPushNames.ToHashSet(StringComparer.Ordinal);
+                HashSet<string> observedRequiredPushes = new(StringComparer.Ordinal);
+                List<string> pushNames = [];
+                Dictionary<string, Packet.Push> pushesByName = new(StringComparer.Ordinal);
+                for (int packetIndex = 0; packetIndex < maxStartupPushes && observedRequiredPushes.Count < requiredPushes.Count; packetIndex++)
+                {
+                    Packet packet = harness.ReadPacket($"{name} {packetIndex + 1}");
+                    AssertEqual(Packet.ContentType.Push, packet.Type, $"{name} {packetIndex + 1} packet type");
+                    Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                    pushNames.Add(push.Name);
+                    pushesByName.TryAdd(push.Name, push);
+                    if (requiredPushes.Contains(push.Name))
+                        observedRequiredPushes.Add(push.Name);
+                }
+
+                foreach (string requiredPushName in requiredPushNames)
+                {
+                    if (!observedRequiredPushes.Contains(requiredPushName))
+                        throw new InvalidDataException($"{name}: expected {requiredPushName}; observed {(pushNames.Count == 0 ? "<none>" : string.Join(" -> ", pushNames))}.");
+                }
+
+                return pushesByName;
+            }
+
+            static JObject DeserializePushMap(
+                IReadOnlyDictionary<string, Packet.Push> pushesByName,
+                string pushName,
+                string name)
+            {
+                if (!pushesByName.TryGetValue(pushName, out Packet.Push? push))
+                    throw new InvalidDataException($"{name}: expected {pushName} during login startup.");
+
+                try
+                {
+                    return JObject.Parse(MessagePackSerializer.ConvertToJson(push.Content));
+                }
+                catch (Exception ex) when (ex is not InvalidDataException)
+                {
+                    throw new InvalidDataException($"{name}: expected a MessagePack map payload.", ex);
+                }
+            }
+
+
+            static IReadOnlyList<long> RequiredJsonIntegerArray(JObject payload, string memberName, string name)
+            {
+                JArray values = (JArray)RequiredToken(payload, memberName, JTokenType.Array, name);
+                long[] integers = new long[values.Count];
+                for (int index = 0; index < values.Count; index++)
+                {
+                    JToken value = values[index]!;
+                    if (value.Type != JTokenType.Integer)
+                        throw new InvalidDataException($"{name} {memberName}[{index}]: expected JSON Integer, got {value.Type}.");
+                    integers[index] = value.Value<long>();
+                }
+
+                return integers;
+            }
+
+            static void AssertBigWorldAck(LoopbackSessionHarness harness, string requestName, int packetId)
+            {
+                Type requestType = RequiredPayloadType(requestName);
+                string responseName = requestName[..^"Request".Length] + "Response";
+                Type responseType = RequiredPayloadType(responseName);
+                object request = Activator.CreateInstance(requestType)
+                    ?? throw new InvalidDataException($"{requestName}: expected a public parameterless constructor.");
+
+                InvokeRegisteredRequestHandler(requestName, harness.Session, packetId, request);
+                object response = ReadResponsePayload(
+                    harness,
+                    packetId,
+                    responseName,
+                    $"{requestName} response",
+                    responseType,
+                    maxPacketsToRead: 3);
+                AssertEqual(0, GetRequiredIntegerMember(response, "Code"), $"{responseName} Code");
+            }
+
+            static Type RequiredPayloadType(string typeName)
+            {
+                string[] candidateFullNames =
+                [
+                    $"AscNet.GameServer.Handlers.{typeName}",
+                    $"AscNet.Common.MsgPack.{typeName}"
+                ];
+                Assembly[] candidateAssemblies =
+                [
+                    typeof(PacketFactory).Assembly,
+                    typeof(NotifyLogin).Assembly
+                ];
+
+                foreach (string fullName in candidateFullNames)
+                {
+                    foreach (Assembly assembly in candidateAssemblies.Distinct())
+                    {
+                        Type? type = assembly.GetType(fullName, throwOnError: false);
+                        if (type is not null)
+                            return type;
+                    }
+                }
+
+                throw new TypeLoadException($"Expected BigWorld payload type {typeName} in AscNet.GameServer.Handlers or AscNet.Common.MsgPack.");
+            }
+        }
+
         private static void ValidateItemUseCompatibility()
         {
             using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForShopCompatibility();
@@ -6727,6 +8263,18 @@ namespace AscNet.Test
                 ]);
             }
 
+            public static MongoCollectionOverride InstallForMainLine2MessageStateCompatibility(
+                out RecordingMongoCollectionProxy<AscNet.Common.Database.Player> playerCollection)
+            {
+                IMongoCollection<AscNet.Common.Database.Player> recordingPlayerCollection = CreateRecordingMongoCollection(out playerCollection);
+                return new MongoCollectionOverride(
+                [
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Inventory)), CreateNoOpMongoCollection<AscNet.Common.Database.Inventory>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Character)), CreateNoOpMongoCollection<AscNet.Common.Database.Character>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Player)), recordingPlayerCollection)
+                ]);
+            }
+
             public static MongoCollectionOverride InstallForStoryDeployVersionGapCompatibility()
             {
                 return new MongoCollectionOverride(
@@ -6753,6 +8301,14 @@ namespace AscNet.Test
             private static IMongoCollection<TDocument> CreateNoOpMongoCollection<TDocument>()
             {
                 return DispatchProxy.Create<IMongoCollection<TDocument>, NoOpMongoCollectionProxy<TDocument>>();
+            }
+
+            private static IMongoCollection<TDocument> CreateRecordingMongoCollection<TDocument>(
+                out RecordingMongoCollectionProxy<TDocument> recorder)
+            {
+                IMongoCollection<TDocument> collection = DispatchProxy.Create<IMongoCollection<TDocument>, RecordingMongoCollectionProxy<TDocument>>();
+                recorder = (RecordingMongoCollectionProxy<TDocument>)(object)collection;
+                return collection;
             }
 
             private static void SetStaticReadonlyField(FieldInfo field, object? value)
@@ -6796,6 +8352,32 @@ namespace AscNet.Test
                 }
 
                 return returnType.IsValueType ? Activator.CreateInstance(returnType) : null;
+            }
+        }
+
+        private class RecordingMongoCollectionProxy<TDocument> : NoOpMongoCollectionProxy<TDocument>
+        {
+            public int ReplaceOneCalls { get; private set; }
+            public TDocument? LastReplacement { get; private set; }
+
+            protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+            {
+                if (string.Equals(targetMethod?.Name, nameof(IMongoCollection<TDocument>.ReplaceOne), StringComparison.Ordinal)
+                    && args is not null)
+                {
+                    object? replacement = args.Length >= 2 && args[1] is TDocument
+                        ? args[1]
+                        : args.Length >= 3 && args[2] is TDocument
+                            ? args[2]
+                            : null;
+                    if (replacement is TDocument document)
+                    {
+                        ReplaceOneCalls++;
+                        LastReplacement = document;
+                    }
+                }
+
+                return base.Invoke(targetMethod, args);
             }
         }
 
@@ -7220,6 +8802,438 @@ namespace AscNet.Test
             ValidateRequestHandlerRegistration("MainLine2UpdateExhibitionChapterRequest");
         }
 
+        private static void ValidateMainLine2LoginDataBsonCompatibility()
+        {
+            const int passedMainLine2StageId = 10310102;
+            const long derivedFirstPassTime = 1_744_211_568;
+            const long fallbackLastPassTime = derivedFirstPassTime + 99;
+            const int lastPassMainId = 1031;
+            const int messageStateId = 25;
+
+            MainLine2StageTable mainLine2Stage = TableReaderV2.Parse<MainLine2StageTable>().SingleOrDefault(stage => stage.Id == passedMainLine2StageId)
+                ?? throw new InvalidDataException($"MainLine2Stage.tsv: missing regression stage {passedMainLine2StageId}.");
+            AssertEqual(passedMainLine2StageId, mainLine2Stage.Id, $"MainLine2Stage.tsv regression stage {passedMainLine2StageId} Id");
+
+            AscNet.Common.Database.Player bsonPlayer = CreateDrawCompatibilityPlayer(103_101_002);
+            bsonPlayer.FubenMainLine2Data = new FubenMainLine2Data
+            {
+                LastPassStage = new Dictionary<int, long>
+                {
+                    [lastPassMainId] = passedMainLine2StageId
+                },
+                FirstPassTime = new Dictionary<int, long>
+                {
+                    [passedMainLine2StageId] = derivedFirstPassTime
+                },
+                MessageState = new Dictionary<int, int>
+                {
+                    [messageStateId] = 1
+                }
+            };
+
+            byte[] serializedPlayer = bsonPlayer.ToBson();
+            AssertEqual(true, serializedPlayer.Length > 0, "Player BSON serialization with FubenMainLine2Data int-key dictionaries produced bytes");
+            BsonDocument playerDocument = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<BsonDocument>(serializedPlayer);
+            BsonDocument mainLine2Document = playerDocument["fuben_main_line2_data"].AsBsonDocument;
+            AssertBsonIntKeyDictionaryContains(mainLine2Document, nameof(FubenMainLine2Data.LastPassStage), lastPassMainId, passedMainLine2StageId, "Player BSON FubenMainLine2Data.LastPassStage int-key dictionary");
+            AssertBsonIntKeyDictionaryContains(mainLine2Document, nameof(FubenMainLine2Data.FirstPassTime), passedMainLine2StageId, derivedFirstPassTime, "Player BSON FubenMainLine2Data.FirstPassTime int-key dictionary");
+            AssertBsonIntKeyDictionaryContains(mainLine2Document, nameof(FubenMainLine2Data.MessageState), messageStateId, 1, "Player BSON FubenMainLine2Data.MessageState int-key dictionary");
+
+            const long loginPlayerId = 103_101_003;
+            AscNet.Common.Database.Player loginPlayer = CreateDrawCompatibilityPlayer(loginPlayerId);
+            loginPlayer.FubenMainLine2Data = new FubenMainLine2Data
+            {
+                LastPassStage = new Dictionary<int, long>
+                {
+                    [lastPassMainId] = passedMainLine2StageId
+                },
+                FirstPassTime = new Dictionary<int, long>(),
+                MessageState = new Dictionary<int, int>()
+            };
+            AscNet.Common.Database.Stage stage = CreateLoginAccountCompatibilityStage(loginPlayerId);
+            stage.AddStage(new StageDatum
+            {
+                StageId = passedMainLine2StageId,
+                StarsMark = 7,
+                Achievement = 0,
+                Passed = true,
+                PassTimesToday = 0,
+                PassTimesTotal = 1,
+                BuyCount = 0,
+                Score = 0,
+                CreateTime = derivedFirstPassTime,
+                LastPassTime = fallbackLastPassTime,
+                RefreshTime = derivedFirstPassTime
+            });
+            if (!stage.Stages.TryGetValue(passedMainLine2StageId, out StageDatum? persistedStage) || !persistedStage.Passed)
+                throw new InvalidDataException($"MainLine2 login regression setup: expected passed stage {passedMainLine2StageId} in persisted Stage model.");
+
+            Type accountModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule");
+            MethodInfo buildNotifyLogin = RequiredMethod(
+                accountModule,
+                "BuildNotifyLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session)]);
+
+            NotifyLogin productionLogin;
+            using (LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(loginPlayerId),
+                loginPlayer,
+                CreateDrawCompatibilityInventory(loginPlayerId, []),
+                "mainline2-login-bson-compat-test"))
+            {
+                harness.Session.stage = stage;
+                productionLogin = buildNotifyLogin.Invoke(null, [harness.Session]) as NotifyLogin
+                    ?? throw new InvalidDataException("AccountModule.BuildNotifyLogin returned nil or a non-NotifyLogin payload.");
+            }
+
+            FubenMainLine2Data wireMainLine2Data = productionLogin.FubenMainLine2Data
+                ?? throw new InvalidDataException("AccountModule.BuildNotifyLogin FubenMainLine2Data: expected non-nil wire payload.");
+            if (ReferenceEquals(wireMainLine2Data, loginPlayer.FubenMainLine2Data))
+                throw new InvalidDataException("AccountModule.BuildNotifyLogin FubenMainLine2Data: expected detached wire copy, got persisted instance.");
+            if (!wireMainLine2Data.FirstPassTime.TryGetValue(passedMainLine2StageId, out long wireFirstPassTime))
+                throw new InvalidDataException($"AccountModule.BuildNotifyLogin FubenMainLine2Data.FirstPassTime: missing passed MainLine2 stage {passedMainLine2StageId}.");
+            AssertEqual(derivedFirstPassTime, wireFirstPassTime, "AccountModule.BuildNotifyLogin FubenMainLine2Data.FirstPassTime derives from passed stage CreateTime");
+            AssertEqual(0, loginPlayer.FubenMainLine2Data.FirstPassTime.Count, "AccountModule.BuildNotifyLogin persisted FubenMainLine2Data.FirstPassTime remains empty");
+
+            static void AssertBsonIntKeyDictionaryContains(BsonDocument owner, string fieldName, int expectedKey, long expectedValue, string name)
+            {
+                if (!owner.TryGetValue(fieldName, out BsonValue? dictionaryValue) || !dictionaryValue.IsBsonArray)
+                    throw new InvalidDataException($"{name}: expected BSON ArrayOfDocuments field {fieldName}.");
+
+                foreach (BsonValue entryValue in dictionaryValue.AsBsonArray)
+                {
+                    BsonDocument entry = entryValue.AsBsonDocument;
+                    if (entry.GetValue("k", BsonNull.Value).ToInt32() != expectedKey)
+                        continue;
+
+                    AssertEqual(expectedValue, entry.GetValue("v", BsonNull.Value).ToInt64(), $"{name} key {expectedKey}");
+                    return;
+                }
+
+                throw new InvalidDataException($"{name}: expected BSON ArrayOfDocuments entry for key {expectedKey}.");
+            }
+        }
+
+        private static void ValidateMainLine2MessageStateUpdateCompatibility()
+        {
+            const string requestName = "MainLine2MessageStateUpdateRequest";
+            const string responseName = "MainLine2MessageStateUpdateResponse";
+            const int messageId = 1;
+            const int requestedState = 2;
+            const long playerId = 103_101_004;
+            const int packetId = 13_018;
+
+            Type requestType = RequiredAscNetGameServerType($"AscNet.GameServer.Handlers.{requestName}");
+            Type responseType = RequiredAscNetGameServerType($"AscNet.GameServer.Handlers.{responseName}");
+            MethodInfo handlerMethod = GetRegisteredRequestHandlerMethod(requestName);
+            AssertEqual("MainLine2MessageStateUpdateRequestHandler", handlerMethod.Name, $"{requestName} registered handler method");
+
+            object request = Activator.CreateInstance(requestType)
+                ?? throw new InvalidDataException($"{requestName}: expected a public parameterless constructor for MessagePack.");
+            SetRequiredIntegerMember(request, "Id", messageId);
+            SetRequiredIntegerMember(request, "State", requestedState);
+            object requestRoundTrip = MessagePackRoundTrip(requestType, request);
+            AssertEqual(messageId, GetRequiredIntegerMember(requestRoundTrip, "Id"), $"{requestName} Id MessagePack round-trip");
+            AssertEqual(requestedState, GetRequiredIntegerMember(requestRoundTrip, "State"), $"{requestName} State MessagePack round-trip");
+
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForMainLine2MessageStateCompatibility(
+                out RecordingMongoCollectionProxy<AscNet.Common.Database.Player> playerCollection);
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                player,
+                CreateDrawCompatibilityInventory(playerId, []),
+                "mainline2-message-state-compat-test");
+
+            InvokeRegisteredRequestHandler(requestName, harness.Session, packetId, requestRoundTrip);
+            object response = ReadResponsePayload(
+                harness,
+                packetId,
+                responseName,
+                $"{requestName} response",
+                responseType);
+            AssertEqual(0, GetRequiredIntegerMember(response, "Code"), $"{responseName} Code");
+
+            FubenMainLine2Data persistedMainLine2Data = player.FubenMainLine2Data
+                ?? throw new InvalidDataException($"{requestName}: expected handler to initialize persisted FubenMainLine2Data.");
+            if (!persistedMainLine2Data.MessageState.TryGetValue(messageId, out int persistedState))
+                throw new InvalidDataException($"{requestName}: expected persisted MessageState entry for message {messageId}.");
+            AssertEqual(requestedState, persistedState, $"{requestName} persisted MessageState[{messageId}]");
+            AssertEqual(1, playerCollection.ReplaceOneCalls, $"{requestName} player save count");
+            if (!ReferenceEquals(player, playerCollection.LastReplacement))
+                throw new InvalidDataException($"{requestName}: expected Player.Save to persist the session player instance.");
+
+            Type accountModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule");
+            MethodInfo buildNotifyLogin = RequiredMethod(
+                accountModule,
+                "BuildNotifyLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session)]);
+            NotifyLogin productionLogin = buildNotifyLogin.Invoke(null, [harness.Session]) as NotifyLogin
+                ?? throw new InvalidDataException("AccountModule.BuildNotifyLogin returned nil or a non-NotifyLogin payload.");
+            FubenMainLine2Data wireMainLine2Data = productionLogin.FubenMainLine2Data
+                ?? throw new InvalidDataException($"{requestName}: AccountModule.BuildNotifyLogin FubenMainLine2Data serialized as nil.");
+            if (!wireMainLine2Data.MessageState.TryGetValue(messageId, out int wireState))
+                throw new InvalidDataException($"{requestName}: AccountModule.BuildNotifyLogin missing MessageState entry for message {messageId}.");
+            AssertEqual(requestedState, wireState, $"{requestName} login MessageState[{messageId}]");
+        }
+
+        private static void ValidateMainLine2ReceiveMainTreasureCompatibility()
+        {
+            const string requestName = nameof(MainLine2ReceiveMainTreasureRequest);
+            const int mainId = 1038;
+            const int treasureId = 103801;
+            const int firstTreasureIdx = 0;
+            const int firstChestRequiredStageCount = 5;
+            const int secondChestRequiredStageCount = 10;
+            const int highlightRewardId = 64320;
+            const int normalRewardId = 64318;
+            const int duplicateCode = 20003010;
+            const int notEnoughProgressCode = 20003009;
+
+            MethodInfo handlerMethod = GetRegisteredRequestHandlerMethod(requestName);
+            AssertEqual("MainLine2ReceiveMainTreasureRequestHandler", handlerMethod.Name, $"{requestName} registered handler method");
+
+            MainLine2MainTable main = TableReaderV2.Parse<MainLine2MainTable>().SingleOrDefault(row => row.Id == mainId)
+                ?? throw new InvalidDataException($"MainLine2Main.tsv: missing main {mainId}.");
+            AssertEqual(treasureId, main.TreasureId ?? 0, $"MainLine2Main.tsv main {mainId} TreasureId");
+            MainLine2TreasureTable treasure = TableReaderV2.Parse<MainLine2TreasureTable>().SingleOrDefault(row => row.Id == treasureId)
+                ?? throw new InvalidDataException($"MainLine2Treasure.tsv: missing treasure {treasureId}.");
+            AssertIntegerList([5, 10, 15, 21], treasure.StageCounts.Select(stageCount => (long)stageCount).ToArray(), $"MainLine2Treasure.tsv treasure {treasureId} StageCounts");
+            AssertIntegerList([64318, 64318, 64319, 64319], treasure.RewardIds.Select(rewardId => (long)rewardId).ToArray(), $"MainLine2Treasure.tsv treasure {treasureId} RewardIds");
+            AssertIntegerList([64320, 64320, 64321, 64321], treasure.HighlightRewardIds.Select(rewardId => (long)rewardId).ToArray(), $"MainLine2Treasure.tsv treasure {treasureId} HighlightRewardIds");
+            AssertEqual(firstChestRequiredStageCount, treasure.StageCounts[firstTreasureIdx], $"MainLine2Treasure.tsv treasure {treasureId} StageCounts[{firstTreasureIdx}]");
+            AssertEqual(secondChestRequiredStageCount, treasure.StageCounts[firstTreasureIdx + 1], $"MainLine2Treasure.tsv treasure {treasureId} StageCounts[{firstTreasureIdx + 1}]");
+            AssertEqual(normalRewardId, treasure.RewardIds[firstTreasureIdx], $"MainLine2Treasure.tsv treasure {treasureId} RewardIds[{firstTreasureIdx}]");
+            AssertEqual(highlightRewardId, treasure.HighlightRewardIds[firstTreasureIdx], $"MainLine2Treasure.tsv treasure {treasureId} HighlightRewardIds[{firstTreasureIdx}]");
+
+            List<RewardGoodsTable> rewardGoodsRows = TableReaderV2.Parse<RewardGoodsTable>();
+            List<RewardGoodsTable> expectedRewardGoods = [];
+            expectedRewardGoods.AddRange(ResolveRewardGoods(
+                highlightRewardId,
+                rewardGoodsRows,
+                $"{requestName} highlight reward {highlightRewardId}"));
+            expectedRewardGoods.AddRange(ResolveRewardGoods(
+                normalRewardId,
+                rewardGoodsRows,
+                $"{requestName} normal reward {normalRewardId}"));
+            AssertIntegerList(
+                [643200, 643180, 643181, 643182, 643183, 643184, 643185],
+                expectedRewardGoods.Select(goods => (long)goods.Id).ToArray(),
+                $"{requestName} captured/table ordered RewardGoods ids");
+
+            MainLine2ReceiveMainTreasureRequest request = new()
+            {
+                MainId = mainId
+            };
+            MainLine2ReceiveMainTreasureRequest requestRoundTrip = MessagePackSerializer.Deserialize<MainLine2ReceiveMainTreasureRequest>(
+                MessagePackSerializer.Serialize(request));
+            AssertEqual(mainId, requestRoundTrip.MainId ?? 0, $"{requestName} MainId MessagePack round-trip");
+            AssertEqual<int?>(null, requestRoundTrip.MainLineId, $"{requestName} MainLineId absent MessagePack round-trip");
+            AssertEqual<int?>(null, requestRoundTrip.Id, $"{requestName} Id absent MessagePack round-trip");
+            AssertEqual<int?>(null, requestRoundTrip.TreasureId, $"{requestName} TreasureId absent MessagePack round-trip");
+            AssertEqual<int?>(null, requestRoundTrip.TreasureIdx, $"{requestName} TreasureIdx absent MessagePack round-trip");
+            AssertEqual<int?>(null, requestRoundTrip.TreasureIndex, $"{requestName} TreasureIndex absent MessagePack round-trip");
+            AssertEqual<int?>(null, requestRoundTrip.Index, $"{requestName} Index absent MessagePack round-trip");
+
+            const long playerId = 103_100_101;
+            const int validPacketId = 103_101;
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            AscNet.Common.Database.Inventory inventory = CreateDrawCompatibilityInventory(playerId, []);
+            AscNet.Common.Database.Stage enoughProgressStage = CreateMainLine2TreasureStage(playerId, main, firstChestRequiredStageCount);
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForShopCompatibility();
+            using (LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                player,
+                inventory,
+                "mainline2-main-treasure-compat-test"))
+            {
+                harness.Session.stage = enoughProgressStage;
+                InvokeRegisteredRequestHandler(requestName, harness.Session, validPacketId, requestRoundTrip);
+
+                NotifyItemDataList rewardPush = ReadPushPayload<NotifyItemDataList>(
+                    harness,
+                    nameof(NotifyItemDataList),
+                    $"{requestName} valid claim reward inventory push");
+                AssertNotifyItemDataListMatchesRewardGoods(
+                    rewardPush,
+                    expectedRewardGoods,
+                    $"{requestName} valid claim NotifyItemDataList");
+
+                MainLine2ReceiveMainTreasureResponse response = ReadResponsePayload<MainLine2ReceiveMainTreasureResponse>(
+                    harness,
+                    validPacketId,
+                    nameof(MainLine2ReceiveMainTreasureResponse),
+                    $"{requestName} valid claim response");
+                AssertEqual(0, response.Code, $"{requestName} valid claim Code");
+                AssertIntegerList([firstTreasureIdx], response.RewardIdxs.Select(idx => (long)idx).ToArray(), $"{requestName} valid claim RewardIdxs");
+                AssertRewardGoodsListMatchesTable(
+                    response.RewardGoodsList,
+                    expectedRewardGoods,
+                    $"{requestName} valid claim RewardGoodsList");
+                AssertInventoryContainsRewardGoods(
+                    inventory,
+                    expectedRewardGoods,
+                    $"{requestName} valid claim inventory");
+
+                MainLine2MainDatum mainData = RequiredMainLine2MainDatum(player.FubenMainLine2Data, mainId, $"{requestName} valid claim persisted FubenMainLine2Data");
+                AssertIntegerList([firstTreasureIdx], mainData.MainTreasureIdxs.Select(idx => (long)idx).ToArray(), $"{requestName} valid claim persisted MainTreasureIdxs");
+
+                Dictionary<int, long> inventoryCountsAfterFirstClaim = inventory.Items.ToDictionary(item => item.Id, item => item.Count);
+                const int duplicatePacketId = validPacketId + 1;
+                InvokeRegisteredRequestHandler(requestName, harness.Session, duplicatePacketId, requestRoundTrip);
+                MainLine2ReceiveMainTreasureResponse duplicateResponse = ReadResponsePayload<MainLine2ReceiveMainTreasureResponse>(
+                    harness,
+                    duplicatePacketId,
+                    nameof(MainLine2ReceiveMainTreasureResponse),
+                    $"{requestName} duplicate claim response");
+                AssertEqual(duplicateCode, duplicateResponse.Code, $"{requestName} duplicate claim Code mirrors ReceiveTreasureRewardRequest");
+                AssertEmptyList(duplicateResponse.RewardIdxs, $"{requestName} duplicate claim RewardIdxs");
+                AssertEmptyList(duplicateResponse.RewardGoodsList, $"{requestName} duplicate claim RewardGoodsList");
+                AssertInventoryCountsUnchanged(
+                    inventoryCountsAfterFirstClaim,
+                    inventory.Items,
+                    $"{requestName} duplicate claim inventory");
+                mainData = RequiredMainLine2MainDatum(player.FubenMainLine2Data, mainId, $"{requestName} duplicate claim persisted FubenMainLine2Data");
+                AssertIntegerList([firstTreasureIdx], mainData.MainTreasureIdxs.Select(idx => (long)idx).ToArray(), $"{requestName} duplicate claim persisted MainTreasureIdxs");
+                if (harness.TryReadAvailablePacket($"{requestName} duplicate claim unexpected trailing packet", out Packet duplicateUnexpectedPacket))
+                    throw new InvalidDataException($"{requestName} duplicate claim: expected no reward push, got {duplicateUnexpectedPacket.Type}.");
+            }
+
+            const long insufficientPlayerId = playerId + 1;
+            const int insufficientPacketId = validPacketId + 2;
+            AscNet.Common.Database.Player insufficientPlayer = CreateDrawCompatibilityPlayer(insufficientPlayerId);
+            AscNet.Common.Database.Inventory insufficientInventory = CreateDrawCompatibilityInventory(insufficientPlayerId, []);
+            AscNet.Common.Database.Stage insufficientStage = CreateMainLine2TreasureStage(insufficientPlayerId, main, firstChestRequiredStageCount - 1);
+            using (LoopbackSessionHarness insufficientHarness = new(
+                CreateDrawCompatibilityCharacter(insufficientPlayerId),
+                insufficientPlayer,
+                insufficientInventory,
+                "mainline2-main-treasure-insufficient-compat-test"))
+            {
+                insufficientHarness.Session.stage = insufficientStage;
+                InvokeRegisteredRequestHandler(requestName, insufficientHarness.Session, insufficientPacketId, requestRoundTrip);
+                MainLine2ReceiveMainTreasureResponse insufficientResponse = ReadResponsePayload<MainLine2ReceiveMainTreasureResponse>(
+                    insufficientHarness,
+                    insufficientPacketId,
+                    nameof(MainLine2ReceiveMainTreasureResponse),
+                    $"{requestName} insufficient progress response");
+                AssertEqual(notEnoughProgressCode, insufficientResponse.Code, $"{requestName} insufficient progress Code mirrors ReceiveTreasureRewardRequest");
+                AssertEmptyList(insufficientResponse.RewardIdxs, $"{requestName} insufficient progress RewardIdxs");
+                AssertEmptyList(insufficientResponse.RewardGoodsList, $"{requestName} insufficient progress RewardGoodsList");
+                AssertEmptyList(insufficientInventory.Items, $"{requestName} insufficient progress inventory");
+                if (insufficientPlayer.FubenMainLine2Data.MainDatas.Any(data => data.Id == mainId && data.MainTreasureIdxs.Contains(firstTreasureIdx)))
+                    throw new InvalidDataException($"{requestName} insufficient progress: must not persist claimed treasure index {firstTreasureIdx} for main {mainId}.");
+                if (insufficientHarness.TryReadAvailablePacket($"{requestName} insufficient progress unexpected trailing packet", out Packet insufficientUnexpectedPacket))
+                    throw new InvalidDataException($"{requestName} insufficient progress: expected no reward push, got {insufficientUnexpectedPacket.Type}.");
+            }
+
+            static AscNet.Common.Database.Stage CreateMainLine2TreasureStage(long uid, MainLine2MainTable main, int passedStageCount)
+            {
+                AscNet.Common.Database.Stage stage = CreateLoginAccountCompatibilityStage(uid);
+                int[] stageIds = ResolveMainLine2StageIdsInTableOrder(main).Take(passedStageCount).ToArray();
+                AssertEqual(passedStageCount, stageIds.Length, $"MainLine2 main {main.Id} passed stage fixture count");
+                long passTime = 1_744_211_568;
+                foreach (int stageId in stageIds)
+                {
+                    stage.AddStage(new StageDatum
+                    {
+                        StageId = stageId,
+                        StarsMark = 7,
+                        Achievement = 0,
+                        Passed = true,
+                        PassTimesToday = 0,
+                        PassTimesTotal = 1,
+                        BuyCount = 0,
+                        Score = 0,
+                        CreateTime = passTime,
+                        LastPassTime = passTime,
+                        RefreshTime = passTime
+                    });
+                    passTime++;
+                }
+
+                return stage;
+            }
+
+            static int[] ResolveMainLine2StageIdsInTableOrder(MainLine2MainTable main)
+            {
+                Dictionary<int, MainLine2ChapterTable> chaptersById = TableReaderV2.Parse<MainLine2ChapterTable>().ToDictionary(chapter => chapter.ChapterId);
+                Dictionary<int, MainLine2StageGroupTable> stageGroupsById = TableReaderV2.Parse<MainLine2StageGroupTable>().ToDictionary(stageGroup => stageGroup.Id);
+                List<int> stageIds = [];
+                foreach (int chapterId in main.ChapterIds.Where(chapterId => chapterId > 0))
+                {
+                    if (!chaptersById.TryGetValue(chapterId, out MainLine2ChapterTable? chapter))
+                        throw new InvalidDataException($"MainLine2Chapter.tsv: missing chapter {chapterId} for main {main.Id}.");
+                    foreach (int stageGroupId in chapter.StageGroupIds.Where(stageGroupId => stageGroupId > 0))
+                    {
+                        if (!stageGroupsById.TryGetValue(stageGroupId, out MainLine2StageGroupTable? stageGroup))
+                            throw new InvalidDataException($"MainLine2StageGroup.tsv: missing stage group {stageGroupId} for chapter {chapterId}.");
+                        stageIds.AddRange(stageGroup.StageIds.Where(stageId => stageId > 0));
+                    }
+                }
+
+                return stageIds.Distinct().ToArray();
+            }
+
+            static MainLine2MainDatum RequiredMainLine2MainDatum(FubenMainLine2Data data, int expectedMainId, string name)
+            {
+                return data.MainDatas.SingleOrDefault(mainData => mainData.Id == expectedMainId)
+                    ?? throw new InvalidDataException($"{name}: expected MainDatas entry for main {expectedMainId}.");
+            }
+
+            static void AssertRewardGoodsListMatchesTable(IReadOnlyList<RewardGoods> actual, IReadOnlyList<RewardGoodsTable> expected, string name)
+            {
+                AssertEqual(expected.Count, actual.Count, $"{name} count");
+                for (int index = 0; index < expected.Count; index++)
+                {
+                    RewardGoodsTable expectedGoods = expected[index];
+                    RewardGoods actualGoods = actual[index];
+                    AssertEqual(expectedGoods.Id, actualGoods.Id, $"{name}[{index}].Id");
+                    AssertEqual(expectedGoods.TemplateId, actualGoods.TemplateId, $"{name}[{index}].TemplateId");
+                    AssertEqual(expectedGoods.Count, actualGoods.Count, $"{name}[{index}].Count");
+                    AssertEqual((int)RewardType.Item, actualGoods.RewardType, $"{name}[{index}].RewardType");
+                }
+            }
+
+            static void AssertNotifyItemDataListMatchesRewardGoods(NotifyItemDataList actual, IReadOnlyList<RewardGoodsTable> expected, string name)
+            {
+                Dictionary<int, long> notifiedCountsByItemId = actual.ItemDataList.ToDictionary(item => item.Id, item => item.Count);
+                AssertEqual(expected.Count, notifiedCountsByItemId.Count, $"{name} item count");
+                foreach (RewardGoodsTable expectedGoods in expected)
+                {
+                    if (!notifiedCountsByItemId.TryGetValue(expectedGoods.TemplateId, out long actualCount))
+                        throw new InvalidDataException($"{name}: missing rewarded item {expectedGoods.TemplateId}.");
+                    AssertEqual((long)expectedGoods.Count, actualCount, $"{name} item {expectedGoods.TemplateId} count");
+                }
+            }
+
+            static void AssertInventoryContainsRewardGoods(AscNet.Common.Database.Inventory inventory, IReadOnlyList<RewardGoodsTable> expected, string name)
+            {
+                Dictionary<int, long> inventoryCountsByItemId = inventory.Items.ToDictionary(item => item.Id, item => item.Count);
+                AssertEqual(expected.Count, inventoryCountsByItemId.Count, $"{name} item count");
+                foreach (RewardGoodsTable expectedGoods in expected)
+                {
+                    if (!inventoryCountsByItemId.TryGetValue(expectedGoods.TemplateId, out long actualCount))
+                        throw new InvalidDataException($"{name}: missing item {expectedGoods.TemplateId}.");
+                    AssertEqual((long)expectedGoods.Count, actualCount, $"{name} item {expectedGoods.TemplateId} count");
+                }
+            }
+
+            static void AssertInventoryCountsUnchanged(IReadOnlyDictionary<int, long> expected, IReadOnlyList<Item> actual, string name)
+            {
+                Dictionary<int, long> actualCounts = actual.ToDictionary(item => item.Id, item => item.Count);
+                AssertEqual(expected.Count, actualCounts.Count, $"{name} item count");
+                foreach (KeyValuePair<int, long> expectedItem in expected)
+                {
+                    if (!actualCounts.TryGetValue(expectedItem.Key, out long actualCount))
+                        throw new InvalidDataException($"{name}: missing item {expectedItem.Key}.");
+                    AssertEqual(expectedItem.Value, actualCount, $"{name} item {expectedItem.Key} count");
+                }
+            }
+        }
+
         private static void ValidateMainLineLuosaitaEnterCompatibility()
         {
             MainLineLuosaitaEnterRequest request = new()
@@ -7539,10 +9553,16 @@ namespace AscNet.Test
                 throw new InvalidDataException("Quick-clear FightSettleResponse: expected Settle payload.");
             if (quickClearStagePush.StageList.Count == 0)
                 throw new InvalidDataException("Quick-clear NotifyStageData StageList: expected visible story stage update.");
-            AssertEqual(quickClearVisibleStageId, (uint)quickClearStagePush.StageList[0].StageId, "Quick-clear NotifyStageData StageList[0].StageId uses visible story stage");
+            StageDatum quickClearPushedStage = quickClearStagePush.StageList[0];
+            AssertEqual(quickClearVisibleStageId, (uint)quickClearPushedStage.StageId, "Quick-clear NotifyStageData StageList[0].StageId uses visible story stage");
+            AssertEqual(0L, quickClearPushedStage.Achievement, "Quick-clear NotifyStageData StageList[0].Achievement is gated off for non-MainLine2 Luosaita stage");
+            if (!quickClearHarness.Session.stage.Stages.TryGetValue(quickClearVisibleStageId, out StageDatum? quickClearPersistedStage))
+                throw new InvalidDataException($"Quick-clear persisted StageData: expected visible story stage {quickClearVisibleStageId}.");
+            AssertEqual(quickClearVisibleStageId, (uint)quickClearPersistedStage.StageId, "Quick-clear persisted StageData StageId uses visible story stage");
+            AssertEqual(0L, quickClearPersistedStage.Achievement, "Quick-clear persisted StageData Achievement is gated off for non-MainLine2 Luosaita stage");
             AssertEqual(quickClearVisibleStageId, (uint)quickClearFightSettleResponse.Settle.StageId, "Quick-clear FightSettleResponse Settle.StageId uses visible story stage");
             AssertEqual(quickClearLeftTime, quickClearFightSettleResponse.Settle.LeftTime, "Quick-clear FightSettleResponse Settle.LeftTime comes from request Result.LeftTime");
-            AssertEqual(quickClearAchievement, quickClearFightSettleResponse.Settle.Achievement, "Quick-clear FightSettleResponse Settle.Achievement comes from request Result.AddStars");
+            AssertEqual(0, quickClearFightSettleResponse.Settle.Achievement, "Quick-clear FightSettleResponse Settle.Achievement is gated off for non-MainLine2 Luosaita stage");
             AssertEqual(0, quickClearFightSettleResponse.Settle.ChallengeCount, "Quick-clear FightSettleResponse Settle.ChallengeCount");
             AssertLuosaitaStageProgressDocs(
                 quickClearLuosaitaPush.SectionInfo,
@@ -9428,6 +11448,219 @@ namespace AscNet.Test
 
                 throw new InvalidDataException($"{name}: expected NotifyFubenPrequelData; observed {(pushNames.Count == 0 ? "<none>" : string.Join(", ", pushNames))}.");
             }
+        }
+
+        private static void ValidateFightSettleAchievementCompatibility()
+        {
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForStoryDeployVersionGapCompatibility();
+            const uint eligibleMainLine2StageId = 10_400_101;
+            const uint nonMainLine2StageId = 10_030_201;
+            const long playerId = 88_022;
+            const int firstPreFightPacketId = 13_205;
+            const int firstFightSettlePacketId = 13_206;
+            const int secondPreFightPacketId = 13_207;
+            const int secondFightSettlePacketId = 13_208;
+            const int nonMainLine2PreFightPacketId = 13_209;
+            const int nonMainLine2FightSettlePacketId = 13_210;
+            const int firstRequestAddStars = 0;
+            const int firstRequestAchievement = 2;
+            const int secondRequestAddStars = 0;
+            const int secondRequestAchievement = 1;
+            const int nonMainLine2RequestAddStars = 0;
+            const int nonMainLine2RequestAchievement = 2;
+            const long accumulatedAchievement = firstRequestAchievement | secondRequestAchievement;
+
+            List<MainLine2StageTable> mainLine2Stages = TableReaderV2.Parse<MainLine2StageTable>();
+            MainLine2StageTable eligibleMainLine2Stage = mainLine2Stages.SingleOrDefault(stage => stage.Id == eligibleMainLine2StageId)
+                ?? throw new InvalidDataException($"MainLine2Stage.tsv: missing regression achievement stage {eligibleMainLine2StageId}.");
+            AssertEqual(eligibleMainLine2StageId, (uint)eligibleMainLine2Stage.Id, $"MainLine2Stage.tsv regression achievement stage {eligibleMainLine2StageId} Id");
+            if (mainLine2Stages.Any(stage => stage.Id == nonMainLine2StageId))
+                throw new InvalidDataException($"MainLine2Stage.tsv: non-MainLine2 achievement regression stage {nonMainLine2StageId} must not be present.");
+            StageTable nonMainLine2Stage = TableReaderV2.Parse<StageTable>().SingleOrDefault(stage => (uint)stage.StageId == nonMainLine2StageId)
+                ?? throw new InvalidDataException($"Stage.tsv: missing non-MainLine2 achievement regression stage {nonMainLine2StageId}.");
+            AssertEqual(nonMainLine2StageId, (uint)nonMainLine2Stage.StageId, $"Stage.tsv non-MainLine2 achievement regression stage {nonMainLine2StageId} StageId");
+
+            AscNet.Common.Database.Player player = CreateDrawCompatibilityPlayer(playerId);
+            player.TeamGroups[0] = new TeamGroupDatum
+            {
+                TeamType = 1,
+                TeamId = 0,
+                CaptainPos = 1,
+                FirstFightPos = 1,
+                TeamData = []
+            };
+            AscNet.Common.Database.Stage stage = CreateLoginAccountCompatibilityStage(playerId);
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                player,
+                CreateDrawCompatibilityInventory(playerId, []),
+                "fight-settle-achievement-compat-test");
+            harness.Session.stage = stage;
+
+            if (stage.Stages.ContainsKey(eligibleMainLine2StageId))
+                throw new InvalidDataException($"FightSettleRequest achievement test setup: stage {eligibleMainLine2StageId} must not be pre-cleared.");
+            if (stage.Stages.ContainsKey(nonMainLine2StageId))
+                throw new InvalidDataException($"FightSettleRequest achievement test setup: stage {nonMainLine2StageId} must not be pre-cleared.");
+
+            FightSettleResponse firstSettleResponse = InvokeFightSettleAchievementClear(
+                harness,
+                eligibleMainLine2StageId,
+                playerId,
+                firstPreFightPacketId,
+                firstFightSettlePacketId,
+                firstRequestAddStars,
+                firstRequestAchievement,
+                firstRequestAchievement,
+                "FightSettleRequest first achievement clear");
+            AssertFightSettleAchievementResponse(
+                firstSettleResponse,
+                eligibleMainLine2StageId,
+                firstRequestAchievement,
+                "FightSettleResponse first achievement clear");
+
+            if (!stage.Stages.TryGetValue(eligibleMainLine2StageId, out StageDatum? firstPersistedStage))
+                throw new InvalidDataException($"FightSettleRequest first achievement clear: session stage data did not persist stage {eligibleMainLine2StageId}.");
+            AssertFightSettleAchievementStageDatum(
+                firstPersistedStage,
+                eligibleMainLine2StageId,
+                firstRequestAchievement,
+                "Persisted FightSettleRequest first achievement clear");
+
+            FightSettleResponse secondSettleResponse = InvokeFightSettleAchievementClear(
+                harness,
+                eligibleMainLine2StageId,
+                playerId,
+                secondPreFightPacketId,
+                secondFightSettlePacketId,
+                secondRequestAddStars,
+                secondRequestAchievement,
+                accumulatedAchievement,
+                "FightSettleRequest repeat achievement clear");
+            AssertFightSettleAchievementResponse(
+                secondSettleResponse,
+                eligibleMainLine2StageId,
+                secondRequestAchievement,
+                "FightSettleResponse repeat achievement clear");
+
+            if (!stage.Stages.TryGetValue(eligibleMainLine2StageId, out StageDatum? secondPersistedStage))
+                throw new InvalidDataException($"FightSettleRequest repeat achievement clear: session stage data did not persist stage {eligibleMainLine2StageId}.");
+            AssertFightSettleAchievementStageDatum(
+                secondPersistedStage,
+                eligibleMainLine2StageId,
+                accumulatedAchievement,
+                "Persisted FightSettleRequest repeat achievement clear");
+
+            FightSettleResponse nonMainLine2SettleResponse = InvokeFightSettleAchievementClear(
+                harness,
+                nonMainLine2StageId,
+                playerId,
+                nonMainLine2PreFightPacketId,
+                nonMainLine2FightSettlePacketId,
+                nonMainLine2RequestAddStars,
+                nonMainLine2RequestAchievement,
+                0,
+                "FightSettleRequest non-MainLine2 achievement clear");
+            AssertFightSettleAchievementResponse(
+                nonMainLine2SettleResponse,
+                nonMainLine2StageId,
+                0,
+                "FightSettleResponse non-MainLine2 achievement clear");
+
+            if (!stage.Stages.TryGetValue(nonMainLine2StageId, out StageDatum? nonMainLine2PersistedStage))
+                throw new InvalidDataException($"FightSettleRequest non-MainLine2 achievement clear: session stage data did not persist stage {nonMainLine2StageId}.");
+            AssertFightSettleAchievementStageDatum(
+                nonMainLine2PersistedStage,
+                nonMainLine2StageId,
+                0,
+                "Persisted FightSettleRequest non-MainLine2 achievement clear");
+        }
+
+        private static FightSettleResponse InvokeFightSettleAchievementClear(
+            LoopbackSessionHarness harness,
+            uint stageId,
+            long playerId,
+            int preFightPacketId,
+            int fightSettlePacketId,
+            int addStars,
+            int achievement,
+            long expectedStageAchievement,
+            string name)
+        {
+            PreFightRequest preFightRequest = new()
+            {
+                PreFightData = new()
+                {
+                    ChallengeCount = 1,
+                    StageId = stageId,
+                    CardIds = null,
+                    RobotIds = null,
+                    FirstFightPos = 1,
+                    CaptainPos = 1,
+                    IsHasAssist = false
+                }
+            };
+
+            InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, preFightPacketId, preFightRequest);
+            PreFightResponse preFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness,
+                preFightPacketId,
+                nameof(PreFightResponse),
+                $"{name} PreFightResponse");
+            AssertEqual(0, preFightResponse.Code, $"{name} PreFightResponse Code");
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"{name}: expected PreFightResponse FightData.");
+
+            FightSettleRequest settleRequest = CreateMissingStageSettleRequest(stageId, preFightResponse.FightData.FightId, playerId);
+            settleRequest.Result.AddStars = addStars;
+            settleRequest.Result.Achievement = achievement;
+            FightSettleRequest settleRoundTrip = MessagePackSerializer.Deserialize<FightSettleRequest>(
+                MessagePackSerializer.Serialize(settleRequest));
+            AssertEqual(addStars, settleRoundTrip.Result.AddStars, $"{name} Result.AddStars MessagePack round-trip");
+            AssertEqual(achievement, settleRoundTrip.Result.Achievement, $"{name} Result.Achievement MessagePack round-trip");
+
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                fightSettlePacketId,
+                settleRoundTrip);
+            (NotifyStageData stagePush, FightSettleResponse settleResponse) = ReadUnknownStageSettleResult(
+                harness,
+                fightSettlePacketId);
+
+            StageDatum pushedStage = stagePush.StageList.SingleOrDefault(stageDatum => stageDatum.StageId == stageId)
+                ?? throw new InvalidDataException($"{name} NotifyStageData: missing stage {stageId}.");
+            AssertFightSettleAchievementStageDatum(
+                pushedStage,
+                stageId,
+                expectedStageAchievement,
+                $"{name} NotifyStageData");
+
+            return settleResponse;
+        }
+
+        private static void AssertFightSettleAchievementResponse(
+            FightSettleResponse settleResponse,
+            uint stageId,
+            int expectedAchievement,
+            string name)
+        {
+            AssertEqual(0, settleResponse.Code, $"{name} Code");
+            if (settleResponse.Settle is null)
+                throw new InvalidDataException($"{name}: expected Settle payload.");
+            AssertEqual(stageId, (uint)settleResponse.Settle.StageId, $"{name} Settle.StageId");
+            AssertEqual(expectedAchievement, settleResponse.Settle.Achievement, $"{name} Settle.Achievement");
+        }
+
+        private static void AssertFightSettleAchievementStageDatum(
+            StageDatum stageDatum,
+            uint stageId,
+            long expectedAchievement,
+            string name)
+        {
+            AssertEqual(stageId, (uint)stageDatum.StageId, $"{name} StageId");
+            AssertEqual(true, stageDatum.Passed, $"{name} Passed");
+            AssertEqual(7L, stageDatum.StarsMark, $"{name} StarsMark");
+            AssertEqual(expectedAchievement, stageDatum.Achievement, $"{name} Achievement");
         }
 
         private static void ValidateFightSettleRetreatCompatibility()
@@ -11869,6 +14102,37 @@ namespace AscNet.Test
             }
         }
 
+        private static void AssertRetroFestivalTimeLimitControlsPresent(IReadOnlyList<TimeLimitCtrlConfigList>? actual, string name)
+        {
+            if (actual is null)
+                throw new InvalidDataException($"{name}: expected Retro/Festival controls for FestivalInfos {string.Join(", ", ExpectedRetroFestivalInfoIds)}, got nil.");
+            if (actual.Count == 0)
+                throw new InvalidDataException($"{name}: expected Retro/Festival controls for FestivalInfos {string.Join(", ", ExpectedRetroFestivalInfoIds)}, got an empty list.");
+
+            Dictionary<long, TimeLimitCtrlConfigList> actualById = actual
+                .GroupBy(timeLimit => timeLimit.Id)
+                .ToDictionary(group => group.Key, group => group.First());
+            foreach (long expectedId in ExpectedRetroFestivalInfoIds)
+            {
+                if (!actualById.ContainsKey(expectedId))
+                    throw new InvalidDataException($"{name}: missing Retro/Festival control id {expectedId}; client UI falls back to 01.01-01.01 when FestivalInfo ids have no matching TimeLimitCtrlConfigList entry.");
+            }
+
+            foreach ((long id, long startTime, long endTime) in ExpectedRetroFestivalDisplayTimeLimitControls)
+            {
+                TimeLimitCtrlConfigList actualTimeLimit = actualById[id];
+                AssertEqual(startTime, actualTimeLimit.StartTime, $"{name} id {id} StartTime");
+                AssertEqual(endTime, actualTimeLimit.EndTime, $"{name} id {id} EndTime");
+                if (actualTimeLimit.StartTime <= 0 || actualTimeLimit.EndTime <= 0)
+                    throw new InvalidDataException($"{name}: Retro/Festival control id {id} must use non-zero retail display timestamps, got StartTime={actualTimeLimit.StartTime}, EndTime={actualTimeLimit.EndTime}.");
+            }
+
+            TimeLimitCtrlConfigList ongoingTimeLimit = actualById[ExpectedRetroFestivalOngoingTimeLimitControlId];
+            AssertEqual(ExpectedRetroFestivalOngoingStartTime, ongoingTimeLimit.StartTime, $"{name} id {ExpectedRetroFestivalOngoingTimeLimitControlId} StartTime");
+            if (ongoingTimeLimit.StartTime <= 0)
+                throw new InvalidDataException($"{name}: Retro/Festival control id {ExpectedRetroFestivalOngoingTimeLimitControlId} must use a non-zero retail StartTime, got {ongoingTimeLimit.StartTime}.");
+        }
+
         private static void AssertIntegerDictionary(IReadOnlyDictionary<int, int> expected, IReadOnlyDictionary<int, int> actual, string name)
         {
             AssertEqual(expected.Count, actual.Count, $"{name} count");
@@ -12001,6 +14265,10 @@ namespace AscNet.Test
 
         private static object ConvertIntegerForType(Type targetType, int value)
         {
+            Type? nullableTargetType = Nullable.GetUnderlyingType(targetType);
+            if (nullableTargetType is not null)
+                return ConvertIntegerForType(nullableTargetType, value);
+
             if (targetType == typeof(int))
                 return value;
             if (targetType == typeof(uint))

@@ -65,6 +65,14 @@ namespace AscNet.GameServer.Handlers
     }
 
     [MessagePackObject(true)]
+    public class NotifyExternalRequiredBigWorldPlayerData
+    {
+        public List<int> EnteredBigWorldIds = new();
+        public int Gender;
+        public List<int> CommanderFashionBags = new();
+    }
+
+    [MessagePackObject(true)]
     public class UseCdKeyRequest
     {
         public string Id;
@@ -98,56 +106,8 @@ namespace AscNet.GameServer.Handlers
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
 
-    internal class AccountModule
+    internal partial class AccountModule
     {
-        private static readonly (long Id, long StartTime, long EndTime)[] CurrentDrawTimeLimitControls =
-        [
-            (36, 1780376400, 0),
-            (50, 1777532400, 1778741940),
-            (51, 1778742000, 1779951540),
-            (52, 1779951600, 1781161140),
-            (53, 1781161200, 1782370740),
-            (54, 1782370800, 1783580340),
-            (55, 1783580400, 1784789940),
-            (47001, 1780376400, 1784178000),
-            (47002, 1780376400, 1784178000),
-            (47101, 1780358400, 1784242800),
-            (47110, 1780376400, 1784178000),
-            (47121, 1780376400, 1784178000),
-            (47201, 1780358400, 1784242800),
-            (47205, 1780376400, 1784264400),
-            (47301, 1780376400, 1784242800),
-            (47351, 1780376400, 1784178000),
-            (47406, 1780358400, 1784242800),
-            (47407, 1780358400, 1784242800),
-            (47408, 1780376400, 1784242800),
-            (47409, 1780376400, 1784264400),
-            (47410, 1780376400, 1784264400),
-            (47601, 1780376400, 1784242740),
-            (47609, 1780376400, 1784264400),
-            (47701, 1780376400, 1784264400),
-            (47703, 1780358400, 1784242800),
-            (47704, 1780358400, 1784242800),
-            (47705, 1780376400, 1784264400),
-            (47706, 1780653600, 1784264400),
-            (47801, 1780376400, 1784264400),
-            (47911, 1780653600, 1784242800),
-            (47912, 1780358400, 1784242800),
-            (47913, 1780653600, 1784242800),
-            (47920, 1780358400, 1784242800),
-            (47921, 1780358400, 1784242800),
-            (47922, 1780358400, 1784242800),
-            (47923, 1780358400, 1784242800),
-            (47930, 1780358400, 1784242800),
-            (47931, 1780376400, 1784178000),
-            (47943, 1780376400, 1780653600),
-            (47944, 1780376400, 1783573200),
-            (47945, 1780376400, 1780740000),
-            (47947, 1780376400, 1781604000),
-            (2160712, 1780376400, 1784178000),
-            (2160713, 1780376400, 1784178000)
-        ];
-
         private const long HomeChatUnlockStageId = 10030201;
         private static readonly long[] DefaultPassedMainStoryStageIds =
         [
@@ -184,8 +144,16 @@ namespace AscNet.GameServer.Handlers
             801,
             802,
             803,
-            20000
+            20000,
+            770307,
+            84100111,
+            863057
         ];
+
+        private static NotifyExternalRequiredBigWorldPlayerData BuildExternalRequiredBigWorldPlayerData()
+        {
+            return DlcModule.BuildExternalRequiredBigWorldPlayerData();
+        }
 
         private static List<TimeLimitCtrlConfigList> BuildCurrentDrawTimeLimitControls()
         {
@@ -402,7 +370,7 @@ namespace AscNet.GameServer.Handlers
                 IsSetFightCgEnable = true,
                 FubenMainLineData = session.player.FubenMainLineData,
                 FubenEventData = new(),
-                FubenMainLine2Data = new(),
+                FubenMainLine2Data = MainLine2Module.BuildLoginData(session),
                 FubenMainLineLuosaitaData = MainLineLuosaitaPayloadFactory.BuildLoginData(session.stage),
                 FashionColorData = new(),
                 FubenChapterExtraLoginData = new(),
@@ -521,18 +489,6 @@ namespace AscNet.GameServer.Handlers
                 BestCardIds = [1021001],
                 LastCardIds = [1021001]
             };
-        }
-
-        private static List<FunctionOpenTimeConfig> BuildFunctionOpenTimeConfigList()
-        {
-            return
-            [
-                new()
-                {
-                    FunctionId = 20000,
-                    TimeId = 100
-                }
-            ];
         }
 
         private static DlcCharacter ToDlcCharacter(CharacterData character)
@@ -780,14 +736,10 @@ namespace AscNet.GameServer.Handlers
                 ["Version"] = "4.5.0",
                 ["KickOut"] = false
             }),
-            ["NotifyActivityDrawList"] = SerializeStartupPayload(new Dictionary<string, object?>
-            {
-                ["DrawIdList"] = Array.Empty<object>()
-            }),
-            ["NotifyActivityDrawGroupCount"] = SerializeStartupPayload(new Dictionary<string, object?>
-            {
-                ["Count"] = 0
-            }),
+            ["NotifyActivityDrawList"] = SerializeStartupPayload(BuildActivityDrawListPayload()),
+            ["NotifyActivityDrawGroupCount"] = SerializeStartupPayload(BuildActivityDrawGroupCountPayload()),
+            ["NotifyNewActivityCalendarData"] = SerializeStartupPayload(BuildNewActivityCalendarPayload()),
+            ["NotifyAccumulateExpendData"] = SerializeStartupPayload(BuildAccumulateExpendPayload()),
             ["NotifyExperimentData"] = SerializeStartupPayload(new Dictionary<string, object?>
             {
                 ["FinishIds"] = Array.Empty<object>(),
@@ -872,12 +824,15 @@ namespace AscNet.GameServer.Handlers
             {
                 ["ChatMessages"] = Array.Empty<object>()
             }),
-            ["NotifyWheelchairManualActivityUpdate"] = SerializeStartupPayload(new Dictionary<string, object?>
-            {
-                ["UpdateTimeLimitActivityInfos"] = Array.Empty<object>(),
-                ["UpdateWeekActivityInfos"] = Array.Empty<object>(),
-                ["CurrentGuildBossEndTime"] = 0
-            })
+            ["NotifyFestivalData"] = SerializeStartupPayload(BuildFestivalPayload()),
+            ["NotifyGame2048DataDb"] = SerializeStartupPayload(BuildGame2048Payload()),
+            ["NotifyGameCollectionData"] = SerializeStartupPayload(BuildGameCollectionPayload()),
+            ["NotifyGoldenMinerGameInfo"] = SerializeStartupPayload(BuildGoldenMinerPayload()),
+            ["NotifySelfChoiceLottoData"] = SerializeStartupPayload(BuildSelfChoiceLottoPayload()),
+            ["NotifyTaikoMasterData"] = SerializeStartupPayload(BuildTaikoMasterPayload()),
+            ["NotifyTurntableData"] = SerializeStartupPayload(BuildTurntablePayload()),
+            ["NotifyWheelchairManualActivity"] = SerializeStartupPayload(BuildWheelchairManualActivityPayload()),
+            ["NotifyWheelchairManualActivityUpdate"] = SerializeStartupPayload(BuildWheelchairManualActivityUpdatePayload())
         };
 
         private static byte[] SerializeStartupPayload(Dictionary<string, object?> payload)
@@ -1034,7 +989,7 @@ Sorry for the inconvenience.
             SendEmptyStartupPush(session, "NotifyDlcChipFormDataList");
             SendEmptyStartupPush(session, "NotifyDlcChipAssistChipId");
             SendEmptyStartupPush(session, "NotifyTheatre5ActivityData");
-            session.SendPush(BuildEmptyNotifyTask());
+            SendCurrentEventTaskBatch(session, CurrentEventTaskBatchTheatre5);
             SendEmptyStartupPush(session, "NotifyTheatre6ActivityData");
             SendEmptyStartupPush(session, "NotifyNameplateLoginData");
             SendEmptyStartupPush(session, "NotifyGuildDormPlayerData");
@@ -1042,18 +997,18 @@ Sorry for the inconvenience.
             SendEmptyStartupPush(session, "NotifyHoldRegressionData");
             SendEmptyStartupPush(session, "NotifyHoldRegressionIgnoreChannel");
             SendEmptyStartupPush(session, "NotifyBountyTaskInfo");
-            session.SendPush(BuildEmptyNotifyTask());
+            SendCurrentEventTaskBatch(session, CurrentEventTaskBatchBounty);
             session.SendPush(new NotifyFiveTwentyRecord());
             session.SendPush(purchaseDailyNotify);
             session.SendPush(purchaseRecommendConfig);
             session.SendPush(new NotifyDrawTicketData());
             SendEmptyStartupPush(session, "NotifyLoginItemCollectionData");
-            SendEmptyStartupPush(session, "NotifyBigWorldMainRedPoint");
-            SendEmptyStartupPush(session, "NotifyExternalRequiredBigWorldPlayerData");
-            session.SendPush(new NotifyAccumulatedPayData());
+            session.SendPush(new NotifyBigWorldMainRedPoint());
+            session.SendPush(BuildExternalRequiredBigWorldPlayerData());
+            session.SendPush(BuildCurrentAccumulatedPayData());
             SendEmptyStartupPush(session, "NotifyAccumulateExpendData");
             session.SendPush(new NotifyArenaActivity());
-            session.SendPush(BuildEmptyNotifyTask());
+            SendCurrentEventTaskBatch(session, CurrentEventTaskBatchArena);
             session.SendPush(new NotifyFubenPrequelData() { FubenPrequelData = new() { RewardedStages = session.stage.PrequelRewardedStages } });
             session.SendPush(new NotifyPrequelChallengeRefreshTime() { NextRefreshTime = NextDailyRefreshTime() });
             session.SendPush(new NotifyDailyFubenLoginData() { RefreshTime = NextDailyRefreshTime() });
@@ -1087,7 +1042,7 @@ Sorry for the inconvenience.
             SendEmptyStartupPush(session, "NotifyGachaCanLiverData");
             SendEmptyStartupPush(session, "NotifyGame2048DataDb");
             SendEmptyStartupPush(session, "NotifyGameCollectionData");
-            session.SendPush(BuildEmptyNotifyTask());
+            SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchEntry);
             SendEmptyStartupPush(session, "NotifyGoldenMinerGameInfo");
             SendEmptyStartupPush(session, "NotifyGuildSignPlayerData");
             SendEmptyStartupPush(session, "NotifyItemRestrictLoginData");
@@ -1104,8 +1059,8 @@ Sorry for the inconvenience.
             SendEmptyStartupPush(session, "NotifySucceedBossData");
             SendEmptyStartupPush(session, "NotifyTaikoMasterData");
             SendEmptyStartupPush(session, "NotifyTheatreData");
-            session.SendPush(BuildEmptyNotifyTask());
-            session.SendPush(BuildEmptyNotifyTask());
+            SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchPostTaikoA);
+            SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchPostTaikoB);
             SendEmptyStartupPush(session, "NotifyTransfiniteData");
             SendEmptyStartupPush(session, "NotifyTurntableData");
             SendEmptyStartupPush(session, "NotifyVoteData");
@@ -1113,9 +1068,9 @@ Sorry for the inconvenience.
             SendEmptyStartupPush(session, "NotifyTheatre4ActivityData");
             SendEmptyStartupPush(session, "NotifyRestaurantData");
             SendEmptyStartupPush(session, "NotifyBlackRockChessData");
-            session.SendPush(BuildEmptyNotifyTask());
-            session.SendPush(BuildEmptyNotifyTask());
-            session.SendPush(BuildEmptyNotifyTask());
+            SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchPostSubModesA);
+            SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchPostSubModesB);
+            SendCurrentEventTaskBatch(session, RetroArcadeTaskBatchPostSubModesC);
             SendEmptyStartupPush(session, "NotifyReviewConfig");
             SendEmptyStartupPush(session, "NotifyPassportData");
             SendEmptyStartupPush(session, "NotifyMentorData");

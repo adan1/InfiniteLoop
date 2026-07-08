@@ -5,6 +5,7 @@ using AscNet.Common.Util;
 using AscNet.GameServer.Handlers.Drops;
 using AscNet.Table.V2.share.character.skill;
 using AscNet.Table.V2.share.fuben;
+using AscNet.Table.V2.share.fuben.mainline2;
 using AscNet.Table.V2.share.item;
 using AscNet.Table.V2.share.reward;
 using AscNet.Table.V2.share.robot;
@@ -252,6 +253,10 @@ namespace AscNet.GameServer.Handlers
 
     internal class FightModule
     {
+        private static readonly Lazy<HashSet<uint>> MainLine2AchievementStageIds = new(() => TableReaderV2.Parse<MainLine2StageTable>()
+            .Select(stage => (uint)stage.Id)
+            .ToHashSet());
+
         [RequestPacketHandler("KcpConfirmRequest")]
         public static void KcpConfirmRequestHandler(Session session, Packet.Request packet)
         {
@@ -288,7 +293,9 @@ namespace AscNet.GameServer.Handlers
         [RequestPacketHandler("LoadCompleteRequest")]
         public static void LoadCompleteRequestHandler(Session session, Packet.Request packet)
         {
+            DlcModule.SendPendingBigWorldStartFightNotify(session);
             session.SendResponse(new LoadCompleteResponse(), packet.Id);
+            DlcModule.SendPendingBigWorldLoadCompleteXRpc(session);
         }
 
         [RequestPacketHandler("CheckCodeRequest")]
@@ -540,7 +547,8 @@ namespace AscNet.GameServer.Handlers
             int challengeCount = session.fight?.PreFight.PreFightData.ChallengeCount ?? 1;
             uint responseStageId = ResolveFightSettleStageId(session, req);
             bool isQuickClear = responseStageId != req.Result.StageId;
-            bool isFirstClear = !session.stage.Stages.ContainsKey(responseStageId);
+            StageDatum? previousStageData = session.stage.Stages.TryGetValue(responseStageId, out StageDatum? existingStageData) ? existingStageData : null;
+            bool isFirstClear = previousStageData is null;
             bool isSuccessfulSettle = req.Result.IsWin && !req.Result.IsForceExit;
             if (!isSuccessfulSettle)
             {
@@ -643,16 +651,30 @@ namespace AscNet.GameServer.Handlers
                 .Where(x => x.Value.CharacterId > 0)
                 .Select(x => (long)x.Value.CharacterId)
                 .ToList() ?? [];
+            int requestedAchievement = IsMainLine2AchievementStage(req.Result.StageId) || IsMainLine2AchievementStage(responseStageId)
+                ? Math.Max(0, req.Result.Achievement)
+                : 0;
+            long stageStarsMark = (previousStageData?.StarsMark ?? 0L) | (isQuickClear ? 0L : 7L);
+            long stageAchievement = (previousStageData?.Achievement ?? 0L) | (long)requestedAchievement;
             StageDatum stageData = BuildFightSettleStageDatum(
                 responseStageId,
-                isQuickClear ? 0 : 7,
+                stageStarsMark,
+                stageAchievement,
                 bestCardIds,
-                isQuickClear);
+                isQuickClear,
+                previousStageData);
             session.stage.AddStage(stageData);
 
             if (isQuickClear && MainLineLuosaitaPayloadFactory.HasCapturedStageProgress((int)req.Result.StageId))
             {
-                StageDatum luosaitaProgressStageData = BuildFightSettleStageDatum(req.Result.StageId, 7, bestCardIds, false);
+                StageDatum? previousLuosaitaProgressStageData = session.stage.Stages.TryGetValue(req.Result.StageId, out StageDatum? existingLuosaitaProgressStageData) ? existingLuosaitaProgressStageData : null;
+                StageDatum luosaitaProgressStageData = BuildFightSettleStageDatum(
+                    req.Result.StageId,
+                    (previousLuosaitaProgressStageData?.StarsMark ?? 0L) | 7L,
+                    (previousLuosaitaProgressStageData?.Achievement ?? 0L) | (long)requestedAchievement,
+                    bestCardIds,
+                    false,
+                    previousLuosaitaProgressStageData);
                 session.stage.AddStage(luosaitaProgressStageData);
             }
 
@@ -669,7 +691,7 @@ namespace AscNet.GameServer.Handlers
                     IsWin = req.Result.IsWin,
                     StageId = stageData.StageId,
                     StarsMark = (int)stageData.StarsMark,
-                    Achievement = req.Result.AddStars,
+                    Achievement = requestedAchievement,
                     RewardGoodsList = multiRewards.Count > 0 ? multiRewards.First() : [],
                     LeftTime = (int)req.Result.LeftTime,
                     NpcHpInfo = req.Result.NpcHpInfo,
@@ -683,6 +705,11 @@ namespace AscNet.GameServer.Handlers
             SendMainLineLuosaitaSectionInfoIfCaptured(session, (int)req.Result.StageId);
             TaskModule.SendStoryTaskSync(session);
             session.SendResponse(fightSettleResponse, packet.Id);
+        }
+
+        private static bool IsMainLine2AchievementStage(uint stageId)
+        {
+            return MainLine2AchievementStageIds.Value.Contains(stageId);
         }
 
         private static uint ResolveFightSettleStageId(Session session, FightSettleRequest req)
@@ -711,26 +738,36 @@ namespace AscNet.GameServer.Handlers
             };
         }
 
-        private static StageDatum BuildFightSettleStageDatum(uint stageId, long starsMark, List<long> bestCardIds, bool isQuickClear)
+        private static StageDatum BuildFightSettleStageDatum(
+            uint stageId,
+            long starsMark,
+            long achievement,
+            List<long> bestCardIds,
+            bool isQuickClear,
+            StageDatum? previousStageData)
         {
             long now = DateTimeOffset.Now.ToUnixTimeSeconds();
             return new StageDatum
             {
                 StageId = stageId,
                 StarsMark = starsMark,
-                Achievement = 0,
+                Achievement = achievement,
                 Passed = true,
-                PassTimesToday = 0,
-                PassTimesTotal = isQuickClear ? 0 : 1,
-                BuyCount = 0,
-                Score = 0,
-                LastPassTime = isQuickClear ? 0 : now,
-                RefreshTime = isQuickClear ? 0 : now,
-                CreateTime = now,
-                BestRecordTime = 0,
-                LastRecordTime = 0,
-                BestCardIds = isQuickClear ? [] : bestCardIds,
-                LastCardIds = isQuickClear ? [] : bestCardIds
+                PassTimesToday = previousStageData?.PassTimesToday ?? 0,
+                PassTimesTotal = (previousStageData?.PassTimesTotal ?? 0) + (isQuickClear ? 0 : 1),
+                BuyCount = previousStageData?.BuyCount ?? 0,
+                Score = previousStageData?.Score ?? 0,
+                LastPassTime = isQuickClear ? (previousStageData?.LastPassTime ?? 0) : now,
+                RefreshTime = isQuickClear ? (previousStageData?.RefreshTime ?? 0) : now,
+                CreateTime = previousStageData is not null && previousStageData.CreateTime > 0 ? previousStageData.CreateTime : now,
+                BestRecordTime = previousStageData?.BestRecordTime ?? 0,
+                LastRecordTime = previousStageData?.LastRecordTime ?? 0,
+                BestCardIds = isQuickClear
+                    ? (previousStageData?.BestCardIds ?? [])
+                    : (bestCardIds.Count > 0 ? bestCardIds : (previousStageData?.BestCardIds ?? [])),
+                LastCardIds = isQuickClear
+                    ? (previousStageData?.LastCardIds ?? [])
+                    : bestCardIds
             };
         }
 

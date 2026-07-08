@@ -184,6 +184,7 @@ namespace AscNet.Common.MsgPack
     public partial class FubenMainLineData
     {
         public List<long> TreasureData { get; set; } = new();
+        [BsonDictionaryOptions(DictionaryRepresentation.ArrayOfDocuments)]
         public Dictionary<int, long> LastPassStage { get; set; } = new();
         public List<dynamic> MainChapterEventInfos { get; set; } = new();
     }
@@ -191,12 +192,31 @@ namespace AscNet.Common.MsgPack
     [MessagePackObject(true)]
     public partial class FubenMainLine2Data
     {
-        public List<dynamic> StageDataList { get; set; } = new();
-        public List<dynamic> ChapterDataList { get; set; } = new();
-        public List<dynamic> TreasureData { get; set; } = new();
-        public List<dynamic> AchievementData { get; set; } = new();
-        public List<dynamic> EggData { get; set; } = new();
-        public List<dynamic> PassStageIds { get; set; } = new();
+        [BsonDictionaryOptions(DictionaryRepresentation.ArrayOfDocuments)]
+        public Dictionary<int, long> LastPassStage { get; set; } = new();
+        public List<MainLine2MainDatum> MainDatas { get; set; } = new();
+        public List<MainLine2ChapterDatum> ChapterDatas { get; set; } = new();
+        public List<object> EggsTreasureDistributeData { get; set; } = new();
+        [BsonDictionaryOptions(DictionaryRepresentation.ArrayOfDocuments)]
+        public Dictionary<int, long> FirstPassTime { get; set; } = new();
+        [BsonDictionaryOptions(DictionaryRepresentation.ArrayOfDocuments)]
+        public Dictionary<int, int> MessageState { get; set; } = new();
+        public int LastExhibitionChapterId { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public partial class MainLine2MainDatum
+    {
+        public int Id { get; set; }
+        public bool IsAchievementGet { get; set; }
+        public List<int> MainTreasureIdxs { get; set; } = new();
+    }
+
+    [MessagePackObject(true)]
+    public partial class MainLine2ChapterDatum
+    {
+        public int Id { get; set; }
+        public List<int> TreasureIdxs { get; set; } = new();
     }
 
     [MessagePackObject(true)]
@@ -1224,6 +1244,7 @@ namespace AscNet.Common.MsgPack
         public Int32 PayId { get; set; }
         public Single PayMoney { get; set; }
         public List<Int32> PayRewardIds { get; set; } = new();
+        public List<Int32> ExtraPayRewardIds { get; set; } = new();
     }
 
 

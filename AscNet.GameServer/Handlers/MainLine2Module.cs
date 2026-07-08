@@ -1,7 +1,11 @@
 using AscNet.Common.Database;
 using AscNet.Common.MsgPack;
+using AscNet.Common.Util;
+using AscNet.Table.V2.share.fuben.mainline2;
+using AscNet.Table.V2.share.reward;
 using MessagePack;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace AscNet.GameServer.Handlers
 {
@@ -15,6 +19,44 @@ namespace AscNet.GameServer.Handlers
 
     [MessagePackObject(true)]
     public class MainLine2UpdateExhibitionChapterResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class MainLine2ReceiveMainTreasureRequest
+    {
+        public int? MainId { get; set; }
+        public int? MainLineId { get; set; }
+        public int? Id { get; set; }
+        public int? TreasureId { get; set; }
+        public int? TreasureIdx { get; set; }
+        public int? TreasureIndex { get; set; }
+        public int? Index { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class MainLine2ReceiveMainTreasureResponse
+    {
+        public int Code { get; set; }
+        public List<int> RewardIdxs { get; set; } = new();
+        public List<RewardGoods> RewardGoodsList { get; set; } = new();
+    }
+
+    [MessagePackObject(true)]
+    public class MainLine2MessageStateUpdateRequest
+    {
+        public int? Id { get; set; }
+        public int? MessageId { get; set; }
+        public int? MessageStateId { get; set; }
+        public int? State { get; set; }
+        public int? Status { get; set; }
+        public int? Value { get; set; }
+        public int? MessageState { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class MainLine2MessageStateUpdateResponse
     {
         public int Code { get; set; }
     }
@@ -82,6 +124,39 @@ namespace AscNet.GameServer.Handlers
             }, packet.Id);
         }
 
+        [RequestPacketHandler("MainLine2ReceiveMainTreasureRequest")]
+        public static void MainLine2ReceiveMainTreasureRequestHandler(Session session, Packet.Request packet)
+        {
+            MainLine2ReceiveMainTreasureRequest request = MessagePackSerializer.Deserialize<MainLine2ReceiveMainTreasureRequest>(packet.Content);
+            MainLine2ReceiveMainTreasureResponse response = ClaimMainLine2MainTreasure(session, request, packet.Content);
+            session.SendResponse(response, packet.Id);
+        }
+
+        [RequestPacketHandler("MainLine2MessageStateUpdateRequest")]
+        public static void MainLine2MessageStateUpdateRequestHandler(Session session, Packet.Request packet)
+        {
+            FubenMainLine2Data data = session.player.FubenMainLine2Data ??= new();
+            NormalizeMainLine2Data(data);
+            string payloadJson = MessagePackSerializer.ConvertToJson(packet.Content);
+            bool updated = false;
+            try
+            {
+                updated = TryApplyMainLine2MessageStateUpdate(data, packet.Content, payloadJson);
+            }
+            catch (Exception ex)
+            {
+                session.log.Warn($"MainLine2MessageStateUpdateRequest invalid payload={payloadJson}: {ex.Message}");
+            }
+
+            if (!updated)
+            {
+                session.log.Warn($"MainLine2MessageStateUpdateRequest unresolved payload={payloadJson}");
+            }
+
+            session.player.Save();
+            session.SendResponse(new MainLine2MessageStateUpdateResponse { Code = 0 }, packet.Id);
+        }
+
         [RequestPacketHandler("MainLineLuosaitaEnterRequest")]
         public static void MainLineLuosaitaEnterRequestHandler(Session session, Packet.Request packet)
         {
@@ -116,6 +191,338 @@ namespace AscNet.GameServer.Handlers
                 Code = 0,
                 SectionInfo = MainLineLuosaitaPayloadFactory.BuildUseDocSectionInfo(request.SectionId, request.DocId, session.stage)
             }, packet.Id);
+        }
+
+        internal static FubenMainLine2Data BuildLoginData(Session session)
+        {
+            FubenMainLine2Data persistedData = session.player.FubenMainLine2Data ??= new();
+            NormalizeMainLine2Data(persistedData);
+            FubenMainLine2Data data = CloneMainLine2Data(persistedData);
+            if (session.stage is not null)
+            {
+                MergeMainLine2FirstPassTimes(data, session.stage);
+            }
+            return data;
+        }
+
+        private static void NormalizeMainLine2Data(FubenMainLine2Data data)
+        {
+            data.LastPassStage ??= new();
+            data.MainDatas ??= new();
+            data.ChapterDatas ??= new();
+            data.EggsTreasureDistributeData ??= new();
+            data.FirstPassTime ??= new();
+            data.MessageState ??= new();
+        }
+
+        private static bool TryApplyMainLine2MessageStateUpdate(FubenMainLine2Data data, byte[] rawContent, string payloadJson)
+        {
+            bool updated = false;
+            try
+            {
+                MainLine2MessageStateUpdateRequest request = MessagePackSerializer.Deserialize<MainLine2MessageStateUpdateRequest>(rawContent);
+                updated = TryApplyMainLine2MessageStateUpdate(data, request);
+            }
+            catch (Exception)
+            {
+            }
+
+            JToken payload = JToken.Parse(payloadJson);
+            updated |= TryApplyMainLine2MessageStateMap(data, payload);
+            if (payload is not JObject payloadObject)
+            {
+                return updated;
+            }
+
+            updated |= TryApplyMainLine2MessageStateMap(data, payloadObject["MessageState"])
+                | TryApplyMainLine2MessageStateMap(data, payloadObject["MessageStates"]);
+            int? messageId = ReadFirstMainLine2MessageStateInt(payloadObject, "Id", "MessageId", "MessageStateId");
+            if (messageId.HasValue && messageId.Value > 0)
+            {
+                int state = ReadFirstMainLine2MessageStateInt(payloadObject, "State", "Status", "Value", "MessageState") ?? 1;
+                data.MessageState[messageId.Value] = state;
+                updated = true;
+            }
+
+            return updated;
+        }
+
+        private static bool TryApplyMainLine2MessageStateUpdate(FubenMainLine2Data data, MainLine2MessageStateUpdateRequest request)
+        {
+            int? messageId = request.Id ?? request.MessageId ?? request.MessageStateId;
+            if (!messageId.HasValue || messageId.Value <= 0)
+            {
+                return false;
+            }
+
+            int state = request.State ?? request.Status ?? request.Value ?? request.MessageState ?? 1;
+            data.MessageState[messageId.Value] = state;
+            return true;
+        }
+
+        private static bool TryApplyMainLine2MessageStateMap(FubenMainLine2Data data, JToken? token)
+        {
+            bool updated = false;
+            if (token is JObject map)
+            {
+                foreach (JProperty property in map.Properties())
+                {
+                    int? state = ReadMainLine2MessageStateInt(property.Value);
+                    if (int.TryParse(property.Name, out int messageId) && messageId > 0 && state.HasValue)
+                    {
+                        data.MessageState[messageId] = state.Value;
+                        updated = true;
+                    }
+                }
+            }
+            else if (token is JArray entries)
+            {
+                foreach (JToken entry in entries)
+                {
+                    if (entry is not JObject entryObject)
+                    {
+                        continue;
+                    }
+
+                    int? messageId = ReadFirstMainLine2MessageStateInt(entryObject, "Key", "Id", "MessageId", "MessageStateId");
+                    int? state = ReadFirstMainLine2MessageStateInt(entryObject, "Value", "State", "Status", "MessageState");
+                    if (messageId.HasValue && messageId.Value > 0 && state.HasValue)
+                    {
+                        data.MessageState[messageId.Value] = state.Value;
+                        updated = true;
+                    }
+                }
+            }
+
+            return updated;
+        }
+
+        private static int? ReadFirstMainLine2MessageStateInt(JObject payload, params string[] names)
+        {
+            foreach (string name in names)
+            {
+                int? value = ReadMainLine2MessageStateInt(payload[name]);
+                if (value.HasValue)
+                {
+                    return value.Value;
+                }
+            }
+
+            return null;
+        }
+
+        private static int? ReadMainLine2MessageStateInt(JToken? token)
+        {
+            if (token is null || token.Type == JTokenType.Null)
+            {
+                return null;
+            }
+
+            return token.Type switch
+            {
+                JTokenType.Integer => token.Value<int>(),
+                JTokenType.Boolean => token.Value<bool>() ? 1 : 0,
+                JTokenType.String => int.TryParse(token.Value<string>(), out int value) ? value : null,
+                _ => null
+            };
+        }
+
+        private static FubenMainLine2Data CloneMainLine2Data(FubenMainLine2Data data)
+        {
+            return new FubenMainLine2Data
+            {
+                LastPassStage = new Dictionary<int, long>(data.LastPassStage),
+                MainDatas = data.MainDatas.Select(mainData => new MainLine2MainDatum
+                {
+                    Id = mainData.Id,
+                    IsAchievementGet = mainData.IsAchievementGet,
+                    MainTreasureIdxs = new List<int>(mainData.MainTreasureIdxs)
+                }).ToList(),
+                ChapterDatas = data.ChapterDatas.Select(chapterData => new MainLine2ChapterDatum
+                {
+                    Id = chapterData.Id,
+                    TreasureIdxs = new List<int>(chapterData.TreasureIdxs)
+                }).ToList(),
+                EggsTreasureDistributeData = new List<object>(data.EggsTreasureDistributeData),
+                FirstPassTime = new Dictionary<int, long>(data.FirstPassTime),
+                MessageState = new Dictionary<int, int>(data.MessageState),
+                LastExhibitionChapterId = data.LastExhibitionChapterId
+            };
+        }
+
+        private static MainLine2ReceiveMainTreasureResponse ClaimMainLine2MainTreasure(Session session, MainLine2ReceiveMainTreasureRequest request, byte[] rawRequestContent)
+        {
+            MainLine2MainTable? main = ResolveMainLine2MainTable(request);
+            if (main is null || main.TreasureId is null or <= 0)
+            {
+                session.log.Warn($"MainLine2ReceiveMainTreasureRequest unresolved payload={MessagePackSerializer.ConvertToJson(rawRequestContent)}");
+                return new MainLine2ReceiveMainTreasureResponse { Code = 20003008 };
+            }
+
+            MainLine2TreasureTable? treasure = TableReaderV2.Parse<MainLine2TreasureTable>()
+                .FirstOrDefault(x => x.Id == main.TreasureId.Value);
+            if (treasure is null)
+            {
+                return new MainLine2ReceiveMainTreasureResponse { Code = 20003008 };
+            }
+
+            FubenMainLine2Data data = session.player.FubenMainLine2Data ??= new();
+            NormalizeMainLine2Data(data);
+            int passedStageCount = CountPassedMainLine2Stages(session.stage, main);
+            List<int> rewardIdxs = ResolveClaimableMainLine2RewardIdxs(request, treasure, data, main.Id, passedStageCount);
+            if (rewardIdxs.Count == 0)
+            {
+                bool hasProgressForAnyReward = treasure.StageCounts.Any(requiredStageCount => passedStageCount >= requiredStageCount);
+                return new MainLine2ReceiveMainTreasureResponse { Code = hasProgressForAnyReward ? 20003010 : 20003009 };
+            }
+
+            var rewardGoods = ResolveMainLine2MainTreasureRewardGoods(treasure, rewardIdxs);
+            if (rewardGoods.Count == 0)
+            {
+                return new MainLine2ReceiveMainTreasureResponse { Code = 20003008 };
+            }
+
+            foreach (int rewardIdx in rewardIdxs)
+            {
+                if (!session.player.AddMainLine2MainTreasure(main.Id, rewardIdx))
+                {
+                    return new MainLine2ReceiveMainTreasureResponse { Code = 20003010 };
+                }
+            }
+
+            List<RewardGoods> rewardGoodsList = RewardHandler.GiveRewards(rewardGoods, session);
+            session.player.Save();
+            session.inventory.Save();
+            session.character.Save();
+
+            return new MainLine2ReceiveMainTreasureResponse
+            {
+                Code = 0,
+                RewardIdxs = rewardIdxs,
+                RewardGoodsList = rewardGoodsList
+            };
+        }
+
+        private static MainLine2MainTable? ResolveMainLine2MainTable(MainLine2ReceiveMainTreasureRequest request)
+        {
+            List<MainLine2MainTable> mains = TableReaderV2.Parse<MainLine2MainTable>();
+            int? mainId = request.MainId ?? request.MainLineId ?? request.Id;
+            if (mainId is not null)
+            {
+                return mains.FirstOrDefault(x => x.Id == mainId.Value);
+            }
+
+            if (request.TreasureId is not null)
+            {
+                return mains.FirstOrDefault(x => x.TreasureId == request.TreasureId.Value);
+            }
+
+            return null;
+        }
+
+        private static int? ResolveMainLine2TreasureIdx(MainLine2ReceiveMainTreasureRequest request)
+        {
+            return request.TreasureIdx ?? request.TreasureIndex ?? request.Index;
+        }
+
+        private static List<int> ResolveClaimableMainLine2RewardIdxs(
+            MainLine2ReceiveMainTreasureRequest request,
+            MainLine2TreasureTable treasure,
+            FubenMainLine2Data data,
+            int mainId,
+            int passedStageCount)
+        {
+            int rewardCount = Math.Min(treasure.StageCounts.Count, treasure.RewardIds.Count);
+            int? requestedRewardIdx = ResolveMainLine2TreasureIdx(request);
+            if (requestedRewardIdx is not null)
+            {
+                int rewardIdx = requestedRewardIdx.Value;
+                if (rewardIdx < 0
+                    || rewardIdx >= rewardCount
+                    || passedStageCount < treasure.StageCounts[rewardIdx]
+                    || IsMainLine2MainTreasureClaimed(data, mainId, rewardIdx))
+                {
+                    return [];
+                }
+
+                return [rewardIdx];
+            }
+
+            List<int> rewardIdxs = new();
+            for (int rewardIdx = 0; rewardIdx < rewardCount; rewardIdx++)
+            {
+                if (passedStageCount >= treasure.StageCounts[rewardIdx]
+                    && !IsMainLine2MainTreasureClaimed(data, mainId, rewardIdx))
+                {
+                    rewardIdxs.Add(rewardIdx);
+                }
+            }
+
+            return rewardIdxs;
+        }
+
+        private static List<RewardGoodsTable> ResolveMainLine2MainTreasureRewardGoods(MainLine2TreasureTable treasure, IEnumerable<int> rewardIdxs)
+        {
+            List<RewardGoodsTable> rewardGoods = new();
+            foreach (int rewardIdx in rewardIdxs)
+            {
+                if (rewardIdx < treasure.HighlightRewardIds.Count && treasure.HighlightRewardIds[rewardIdx] > 0)
+                {
+                    rewardGoods.AddRange(RewardHandler.GetRewardGoods(treasure.HighlightRewardIds[rewardIdx]));
+                }
+
+                if (rewardIdx < treasure.RewardIds.Count && treasure.RewardIds[rewardIdx] > 0)
+                {
+                    rewardGoods.AddRange(RewardHandler.GetRewardGoods(treasure.RewardIds[rewardIdx]));
+                }
+            }
+
+            return rewardGoods;
+        }
+
+        private static bool IsMainLine2MainTreasureClaimed(FubenMainLine2Data data, int mainId, int treasureIdx)
+        {
+            return data.MainDatas.FirstOrDefault(x => x.Id == mainId)?.MainTreasureIdxs.Contains(treasureIdx) == true;
+        }
+
+        private static int CountPassedMainLine2Stages(Stage stage, MainLine2MainTable main)
+        {
+            HashSet<int> stageIds = ResolveMainLine2StageIds(main);
+            return stageIds.Count(stageId => stage.Stages.TryGetValue(stageId, out StageDatum? stageData) && stageData.Passed);
+        }
+
+        private static HashSet<int> ResolveMainLine2StageIds(MainLine2MainTable main)
+        {
+            HashSet<int> chapterIds = main.ChapterIds.Where(chapterId => chapterId > 0).ToHashSet();
+            HashSet<int> stageGroupIds = TableReaderV2.Parse<MainLine2ChapterTable>()
+                .Where(chapter => chapterIds.Contains(chapter.ChapterId))
+                .SelectMany(chapter => chapter.StageGroupIds)
+                .Where(stageGroupId => stageGroupId > 0)
+                .ToHashSet();
+
+            return TableReaderV2.Parse<MainLine2StageGroupTable>()
+                .Where(stageGroup => stageGroupIds.Contains(stageGroup.Id))
+                .SelectMany(stageGroup => stageGroup.StageIds)
+                .Where(stageId => stageId > 0)
+                .ToHashSet();
+        }
+
+        private static void MergeMainLine2FirstPassTimes(FubenMainLine2Data data, Stage stage)
+        {
+            HashSet<int> mainLine2StageIds = TableReaderV2.Parse<MainLine2StageTable>()
+                .Select(x => x.Id)
+                .ToHashSet();
+            foreach (StageDatum stageData in stage.Stages.Values)
+            {
+                if (!stageData.Passed || !mainLine2StageIds.Contains((int)stageData.StageId))
+                {
+                    continue;
+                }
+
+                data.FirstPassTime[(int)stageData.StageId] = stageData.CreateTime > 0
+                    ? stageData.CreateTime
+                    : stageData.LastPassTime;
+            }
         }
     }
 

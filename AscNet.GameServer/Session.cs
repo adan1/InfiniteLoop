@@ -24,6 +24,7 @@ namespace AscNet.GameServer
         public Inventory inventory = default!;
         public int? PendingEnterWorldChatRequestId;
         public int? PendingGetWorldChannelInfoRequestId;
+        public bool PendingBigWorldLoadCompleteXRpc;
         public readonly Logger log;
         private long lastPacketTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         private int packetNo = 0;
@@ -356,6 +357,23 @@ namespace AscNet.GameServer
                 Content = MessagePackSerializer.Serialize(packet)
             });
             log.Info($"{packet.Name}{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + JsonConvert.SerializeObject(response)) : "")}");
+        }
+
+        public void SendResponse(string name, byte[] responseContent, int clientSeq = 0)
+        {
+            Packet.Response packet = new()
+            {
+                Id = clientSeq,
+                Name = name,
+                Content = responseContent
+            };
+            Send(new Packet()
+            {
+                No = 0,
+                Type = Packet.ContentType.Response,
+                Content = MessagePackSerializer.Serialize(packet)
+            });
+            log.Info($"{name}{(Common.Common.config.VerboseLevel >= VerboseLevel.Debug ? (", " + FormatMessagePackContent(responseContent)) : "")}");
         }
 
         private void Send(Packet packet)

@@ -122,6 +122,29 @@ namespace AscNet.Common.Database
             return true;
         }
 
+        public bool AddMainLine2MainTreasure(int mainId, int treasureIdx)
+        {
+            FubenMainLine2Data ??= new();
+            MainLine2MainDatum? mainData = FubenMainLine2Data.MainDatas.FirstOrDefault(x => x.Id == mainId);
+            if (mainData is null)
+            {
+                mainData = new MainLine2MainDatum
+                {
+                    Id = mainId
+                };
+                FubenMainLine2Data.MainDatas.Add(mainData);
+            }
+
+            if (mainData.MainTreasureIdxs.Contains(treasureIdx))
+            {
+                return false;
+            }
+
+            mainData.MainTreasureIdxs.Add(treasureIdx);
+            mainData.MainTreasureIdxs.Sort();
+            return true;
+        }
+
         public bool AddGatherReward(int id)
         {
             if (GatherRewards.Contains(id))
@@ -179,5 +202,8 @@ namespace AscNet.Common.Database
 
         [BsonElement("fuben_main_line_data")]
         public FubenMainLineData FubenMainLineData { get; set; } = new();
+
+        [BsonElement("fuben_main_line2_data")]
+        public FubenMainLine2Data FubenMainLine2Data { get; set; } = new();
     }
 }
