@@ -308,6 +308,7 @@ namespace AscNet.GameServer.Handlers
         [RequestPacketHandler("LeaveFightRequest")]
         public static void LeaveFightRequestHandler(Session session, Packet.Request packet)
         {
+            session.fight = null;
             session.SendResponse(new LeaveFightResponse(), packet.Id);
         }
 
@@ -365,6 +366,19 @@ namespace AscNet.GameServer.Handlers
                 ?? req.PreFightData.RobotIds?.Where(robotId => robotId > 0).ToList()
                 ?? new();
 
+            bool isTheatreFight = BiancaTheatreModule.TryGetTheatreFightDeployment(
+                session,
+                req.PreFightData.StageId,
+                req.PreFightData.CardIds,
+                req.PreFightData.RobotIds,
+                out IReadOnlyList<uint> theatreCardIds,
+                out IReadOnlyList<int> theatreRobotIds);
+            if (isTheatreFight)
+            {
+                cardIdsToDeploy = theatreCardIds;
+                robotIds = theatreRobotIds.ToList();
+            }
+
             if (robotIds.Count > 0)
             {
                 HashSet<int> deployableRobotIds = TableReaderV2.Parse<RobotTable>()
@@ -390,14 +404,25 @@ namespace AscNet.GameServer.Handlers
             for (int i = 0; i < cardIdsToDeploy.Count; i++)
             {
                 uint cardId = cardIdsToDeploy[i];
-                var characterData = session.character.Characters.FirstOrDefault(x => x.Id == cardId);
+                CharacterData? characterData = session.character.Characters.FirstOrDefault(x => x.Id == cardId);
+                IEnumerable<EquipData> equips;
                 if (characterData is null)
-                    continue;
+                {
+                    if (!BiancaTheatreModule.TryBuildTheatreCharacterData(session, cardId, out CharacterData transientCharacter, out IReadOnlyList<EquipData> transientEquips))
+                        continue;
+
+                    characterData = transientCharacter;
+                    equips = transientEquips;
+                }
+                else
+                {
+                    equips = session.character.Equips.Where(x => x.CharacterId == cardId);
+                }
 
                 rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Add(i, new
                 {
                     Character = characterData,
-                    Equips = session.character.Equips.Where(x => x.CharacterId == cardId)
+                    Equips = equips
                 });
             }
 
@@ -416,6 +441,11 @@ namespace AscNet.GameServer.Handlers
 
                     CharacterSkillTable? characterSkill = TableReaderV2.Parse<CharacterSkillTable>().Find(x => x.CharacterId == robot.CharacterId);
                     IEnumerable<int> skills = characterSkill?.SkillGroupId.SelectMany(x => TableReaderV2.Parse<CharacterSkillGroupTable>().Find(y => y.Id == x)?.SkillId ?? new List<int>()) ?? new List<int>();
+                    AscNet.Table.V2.share.character.CharacterTable? robotCharacter = TableReaderV2.Parse<AscNet.Table.V2.share.character.CharacterTable>()
+                        .Find(character => character.Id == robot.CharacterId);
+                    uint fashionId = (uint)(robotCharacter?.DefaultNpcFashtionId > 0
+                        ? robotCharacter.DefaultNpcFashtionId
+                        : robot.FashionId);
                     List<EquipData> equips = new()
                     {
                         new()
@@ -449,7 +479,7 @@ namespace AscNet.GameServer.Handlers
                             Star = Convert.ToInt32(robot.CharacterStar),
                             Grade = Convert.ToInt32(robot.CharacterGrade),
                             SkillList = skills.Where(x => !robot.RemoveSkillId.Contains(x)).Select(x => new CharacterSkill() { Id = (uint)x, Level = Math.Min(Convert.ToInt32(robot.SkillLevel), TableReaderV2.Parse<CharacterSkillLevelEffectTable>().OrderByDescending(x => x.Level).FirstOrDefault(y => y.SkillId == x)?.Level ?? 1) }).ToList(),
-                            FashionId = (uint)Convert.ToInt32(robot.FashionId),
+                            FashionId = fashionId,
                             CreateTime = 0,
                             TrustLv = 1,
                             TrustExp = 0,
@@ -457,14 +487,20 @@ namespace AscNet.GameServer.Handlers
                             LiberateLv = robot.LiberateLv ?? 0,
                             CharacterHeadInfo = new()
                             {
-                                HeadFashionId = (uint)robot.FashionId
+                                HeadFashionId = fashionId
                             }
                         },
-                        Equips = equips
+                        Equips = equips,
+                        IsRobot = true,
+                        RobotId = robotId,
+                        IsNpc = false,
                     });
                     npcKey++;
                 }
             }
+
+            if (isTheatreFight)
+                BiancaTheatreModule.ApplyTheatreFightStageData(session, req.PreFightData.StageId, rsp);
 
             session.fight = new(req);
             session.SendResponse(rsp, packet.Id);
@@ -552,6 +588,7 @@ namespace AscNet.GameServer.Handlers
             bool isSuccessfulSettle = req.Result.IsWin && !req.Result.IsForceExit;
             if (!isSuccessfulSettle)
             {
+                BiancaTheatreModule.TrySendTheatreRetreatSettle(session, req.Result.StageId);
                 session.fight = null;
                 session.SendResponse(BuildFailedFightSettleResponse(responseStageId, req), packet.Id);
                 return;

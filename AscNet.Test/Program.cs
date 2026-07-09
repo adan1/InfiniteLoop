@@ -278,6 +278,12 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--bianca-theatre-compat-only"))
+                {
+                    ValidateBiancaTheatreCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--big-world-enter-compat-only"))
                 {
                     ValidateBigWorldEnterCompatibility();
@@ -1053,6 +1059,14 @@ namespace AscNet.Test
                 startupLogin.TimeLimitCtrlConfigList,
                 "AccountModule.DoLogin NotifyLogin.TimeLimitCtrlConfigList Retro/Festival display controls");
 
+            NotifyArchiveLoginData startupArchiveLoginData = DeserializeStartupPush<NotifyArchiveLoginData>(
+                startupPushesByName,
+                nameof(NotifyArchiveLoginData),
+                "AccountModule.DoLogin NotifyArchiveLoginData startup payload");
+            AssertIntegerList(
+                Enumerable.Range(1, 32).Select(id => (long)id).ToArray(),
+                startupArchiveLoginData.UnlockComics.Select(id => (long)id).ToArray(),
+                "AccountModule.DoLogin NotifyArchiveLoginData.UnlockComics captured retail defaults");
             NotifyFunctionalEntranceData startupFunctionalEntranceData = DeserializeStartupPush<NotifyFunctionalEntranceData>(
                 startupPushesByName,
                 nameof(NotifyFunctionalEntranceData),
@@ -6228,11 +6242,25 @@ namespace AscNet.Test
             player.PlayerData.LastLoginTime = 1_720_000_001;
 
             AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
-            character.Characters.Add(new CharacterData
-            {
-                Id = 1021001,
-                Level = 80
-            });
+            character.Characters.AddRange(
+            [
+                new CharacterData
+                {
+                    Id = 1021001,
+                    Level = 80
+                },
+                new CharacterData
+                {
+                    Id = 1021005,
+                    Level = 80
+                },
+                new CharacterData
+                {
+                    Id = 1051005,
+                    Level = 80
+                }
+            ]);
+            player.AssistCharacterId = 1021005;
 
             using LoopbackSessionHarness harness = new(
                 character,
@@ -6491,6 +6519,646 @@ namespace AscNet.Test
                 GetWorldChannelInfoResponse.GetWorldChannelInfoResponseChannelInfo channelInfo = worldChannelInfoResponse.ChannelInfos[channelIndex];
                 AssertEqual(channelIndex, channelInfo.ChannelId, $"GetWorldChannelInfoResponse ChannelInfos[{channelIndex}] ChannelId");
                 AssertEqual(0, channelInfo.PlayerNum, $"GetWorldChannelInfoResponse ChannelInfos[{channelIndex}] PlayerNum");
+            }
+
+            UnlockArchiveComicsRequest unlockArchiveComicsRoundTrip = MessagePackSerializer.Deserialize<UnlockArchiveComicsRequest>(
+                MessagePackSerializer.Serialize(new UnlockArchiveComicsRequest { Ids = [33, 34, 33] }));
+            AssertIntegerList(
+                [33, 34, 33],
+                unlockArchiveComicsRoundTrip.Ids.Select(id => (long)id).ToArray(),
+                "UnlockArchiveComicsRequest Ids MessagePack round-trip");
+
+            const int unlockArchiveComicsPacketId = 11_015;
+            InvokeRegisteredRequestHandler(
+                nameof(UnlockArchiveComicsRequest),
+                harness.Session,
+                unlockArchiveComicsPacketId,
+                unlockArchiveComicsRoundTrip);
+            UnlockArchiveComicsResponse unlockArchiveComicsResponse = ReadResponsePayload<UnlockArchiveComicsResponse>(
+                harness,
+                unlockArchiveComicsPacketId,
+                nameof(UnlockArchiveComicsResponse),
+                "UnlockArchiveComicsRequest response");
+            AssertEqual(0, unlockArchiveComicsResponse.Code, "UnlockArchiveComicsResponse Code");
+            AssertIntegerList(
+                [33, 34],
+                unlockArchiveComicsResponse.SuccessIds.Select(id => (long)id).ToArray(),
+                "UnlockArchiveComicsResponse SuccessIds newly unlocked ids");
+            AssertIntegerSetContainsAll(
+                [1, 2, 3, 31, 32, 33, 34],
+                player.UnlockComics.Select(id => (long)id).ToArray(),
+                "UnlockArchiveComicsRequest persisted UnlockComics");
+
+            ChangeAssistCharIdRequest changeAssistRoundTrip = MessagePackSerializer.Deserialize<ChangeAssistCharIdRequest>(
+                MessagePackSerializer.Serialize(new ChangeAssistCharIdRequest { AssistCharId = 1051005 }));
+            AssertEqual(1051005, changeAssistRoundTrip.AssistCharId, "ChangeAssistCharIdRequest AssistCharId MessagePack round-trip");
+
+            const int sameAssistPacketId = 11_016;
+            InvokeRegisteredRequestHandler(
+                nameof(ChangeAssistCharIdRequest),
+                harness.Session,
+                sameAssistPacketId,
+                new ChangeAssistCharIdRequest { AssistCharId = 1021005 });
+            ChangeAssistCharIdResponse sameAssistResponse = ReadResponsePayload<ChangeAssistCharIdResponse>(
+                harness,
+                sameAssistPacketId,
+                nameof(ChangeAssistCharIdResponse),
+                "ChangeAssistCharIdRequest same assist response");
+            AssertEqual(20002006, sameAssistResponse.Code, "ChangeAssistCharIdResponse same assist retail rejection Code");
+            AssertEqual(1021005, player.AssistCharacterId, "ChangeAssistCharIdRequest same assist keeps current assist");
+
+            const int switchAssistPacketId = 11_017;
+            InvokeRegisteredRequestHandler(
+                nameof(ChangeAssistCharIdRequest),
+                harness.Session,
+                switchAssistPacketId,
+                changeAssistRoundTrip);
+            ChangeAssistCharIdResponse switchAssistResponse = ReadResponsePayload<ChangeAssistCharIdResponse>(
+                harness,
+                switchAssistPacketId,
+                nameof(ChangeAssistCharIdResponse),
+                "ChangeAssistCharIdRequest switch assist response");
+            AssertEqual(0, switchAssistResponse.Code, "ChangeAssistCharIdResponse switch assist Code");
+            AssertEqual(1051005, player.AssistCharacterId, "ChangeAssistCharIdRequest persisted switched assist");
+
+            const int switchBackAssistPacketId = 11_018;
+            InvokeRegisteredRequestHandler(
+                nameof(ChangeAssistCharIdRequest),
+                harness.Session,
+                switchBackAssistPacketId,
+                new ChangeAssistCharIdRequest { AssistCharId = 1021005 });
+            ChangeAssistCharIdResponse switchBackAssistResponse = ReadResponsePayload<ChangeAssistCharIdResponse>(
+                harness,
+                switchBackAssistPacketId,
+                nameof(ChangeAssistCharIdResponse),
+                "ChangeAssistCharIdRequest switch back assist response");
+            AssertEqual(0, switchBackAssistResponse.Code, "ChangeAssistCharIdResponse switch back assist Code");
+            AssertEqual(1021005, player.AssistCharacterId, "ChangeAssistCharIdRequest persisted switched-back assist");
+
+            BiancaTheatreSelectDifficultyRequest theatreDifficultyRoundTrip =
+                MessagePackSerializer.Deserialize<BiancaTheatreSelectDifficultyRequest>(
+                    MessagePackSerializer.Serialize(new BiancaTheatreSelectDifficultyRequest { Difficulty = 1 }));
+            AssertEqual(1, theatreDifficultyRoundTrip.Difficulty, "BiancaTheatreSelectDifficultyRequest Difficulty MessagePack round-trip");
+
+            const int theatreDifficultyPacketId = 11_019;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectDifficultyRequest),
+                harness.Session,
+                theatreDifficultyPacketId,
+                theatreDifficultyRoundTrip);
+            BiancaTheatreSelectDifficultyResponse theatreDifficultyResponse =
+                ReadResponsePayload<BiancaTheatreSelectDifficultyResponse>(
+                    harness,
+                    theatreDifficultyPacketId,
+                    nameof(BiancaTheatreSelectDifficultyResponse),
+                    "BiancaTheatreSelectDifficultyRequest response");
+            AssertEqual(0, theatreDifficultyResponse.Code, "BiancaTheatreSelectDifficultyResponse Code");
+            AssertEqual(1, theatreDifficultyResponse.ChapterId, "BiancaTheatreSelectDifficultyResponse ChapterId captured response");
+
+            BiancaTheatreSelectTeamRequest theatreTeamRoundTrip =
+                MessagePackSerializer.Deserialize<BiancaTheatreSelectTeamRequest>(
+                    MessagePackSerializer.Serialize(new BiancaTheatreSelectTeamRequest { TeamId = 3 }));
+            AssertEqual(3, theatreTeamRoundTrip.TeamId, "BiancaTheatreSelectTeamRequest TeamId MessagePack round-trip");
+
+            const int theatreTeamPacketId = 11_020;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectTeamRequest),
+                harness.Session,
+                theatreTeamPacketId,
+                theatreTeamRoundTrip);
+            JObject theatreInitialStepPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "BiancaTheatreSelectTeamRequest initial reward step push");
+            AssertEqual(1L, RequiredValue<long>(theatreInitialStepPush, "ChapterId", JTokenType.Integer, "BiancaTheatreSelectTeamRequest initial reward step push"), "BiancaTheatreSelectTeamRequest initial reward step ChapterId");
+            JObject initialRewardStep = RequiredObject(theatreInitialStepPush, "Step", "BiancaTheatreSelectTeamRequest initial reward step push");
+            AssertEqual(340L, RequiredValue<long>(initialRewardStep, "Uid", JTokenType.Integer, "BiancaTheatreSelectTeamRequest initial reward step"), "BiancaTheatreSelectTeamRequest initial reward step Uid");
+            AssertEqual(1L, RequiredValue<long>(initialRewardStep, "StepType", JTokenType.Integer, "BiancaTheatreSelectTeamRequest initial reward step"), "BiancaTheatreSelectTeamRequest initial reward step StepType");
+            JArray initialItemChoices = (JArray)RequiredToken(initialRewardStep, "ItemIds", JTokenType.Array, "BiancaTheatreSelectTeamRequest initial reward step");
+            AssertEqual(3, initialItemChoices.Count, "BiancaTheatreSelectTeamRequest initial reward ItemIds count");
+            AssertEqual(26L, initialItemChoices[0]!.Value<long>(), "BiancaTheatreSelectTeamRequest initial reward first item id");
+
+            NotifyItemDataList initialCurrencyPush = ReadPushPayload<NotifyItemDataList>(
+                harness,
+                nameof(NotifyItemDataList),
+                "BiancaTheatreSelectTeamRequest initial currency push");
+            AssertEqual(3L, initialCurrencyPush.ItemDataList.Single(item => item.Id == 96119).Count, "BiancaTheatreSelectTeamRequest item 96119 initial count");
+            AssertEqual(1L, initialCurrencyPush.ItemDataList.Single(item => item.Id == 96120).Count, "BiancaTheatreSelectTeamRequest item 96120 initial count");
+            NotifyItemDataList currencyAUpgradePush = ReadPushPayload<NotifyItemDataList>(
+                harness,
+                nameof(NotifyItemDataList),
+                "BiancaTheatreSelectTeamRequest item 96119 update push");
+            AssertEqual(8L, currencyAUpgradePush.ItemDataList.Single(item => item.Id == 96119).Count, "BiancaTheatreSelectTeamRequest item 96119 updated count");
+            NotifyItemDataList currencyBUpgradePush = ReadPushPayload<NotifyItemDataList>(
+                harness,
+                nameof(NotifyItemDataList),
+                "BiancaTheatreSelectTeamRequest item 96120 update push");
+            AssertEqual(4L, currencyBUpgradePush.ItemDataList.Single(item => item.Id == 96120).Count, "BiancaTheatreSelectTeamRequest item 96120 updated count");
+
+            BiancaTheatreSelectTeamResponse theatreTeamResponse =
+                ReadResponsePayload<BiancaTheatreSelectTeamResponse>(
+                    harness,
+                    theatreTeamPacketId,
+                    nameof(BiancaTheatreSelectTeamResponse),
+                    "BiancaTheatreSelectTeamRequest response");
+            AssertEqual(0, theatreTeamResponse.Code, "BiancaTheatreSelectTeamResponse Code");
+
+            const int theatreItemRewardPacketId = 11_021;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectItemRewardRequest),
+                harness.Session,
+                theatreItemRewardPacketId,
+                new BiancaTheatreSelectItemRewardRequest { InnerItemId = 26 });
+            JObject addItemPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddItem",
+                "BiancaTheatreSelectItemRewardRequest add item push");
+            JArray addedItems = (JArray)RequiredToken(addItemPush, "BiancaTheatreItems", JTokenType.Array, "BiancaTheatreSelectItemRewardRequest add item push");
+            AssertEqual(1, addedItems.Count, "BiancaTheatreSelectItemRewardRequest added item count");
+            JObject addedItem = (JObject)addedItems[0]!;
+            AssertEqual(75L, RequiredValue<long>(addedItem, "Uid", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest added item"), "BiancaTheatreSelectItemRewardRequest added item Uid");
+            AssertEqual(26L, RequiredValue<long>(addedItem, "ItemId", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest added item"), "BiancaTheatreSelectItemRewardRequest added ItemId");
+            JObject recruitChoiceStepPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "BiancaTheatreSelectItemRewardRequest recruit choice step push");
+            JObject recruitChoiceStep = RequiredObject(recruitChoiceStepPush, "Step", "BiancaTheatreSelectItemRewardRequest recruit choice step push");
+            AssertEqual(341L, RequiredValue<long>(recruitChoiceStep, "Uid", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest recruit choice step"), "BiancaTheatreSelectItemRewardRequest recruit choice step Uid");
+            AssertEqual(3L, RequiredValue<long>(recruitChoiceStep, "StepType", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest recruit choice step"), "BiancaTheatreSelectItemRewardRequest recruit choice step StepType");
+            JObject itemRewardResponse = ReadResponseMapPayload(
+                harness,
+                theatreItemRewardPacketId,
+                "BiancaTheatreSelectItemRewardResponse",
+                "BiancaTheatreSelectItemRewardRequest response");
+            AssertEqual(0L, RequiredValue<long>(itemRewardResponse, "Code", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest response"), "BiancaTheatreSelectItemRewardResponse Code");
+            AssertEqual(26L, RequiredValue<long>(itemRewardResponse, "InnerItemId", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest response"), "BiancaTheatreSelectItemRewardResponse InnerItemId");
+
+            const int theatreRecruitTickPacketId = 11_022;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectRecruitTickRequest),
+                harness.Session,
+                theatreRecruitTickPacketId,
+                new BiancaTheatreSelectRecruitTickRequest { TickId = 1002 });
+            JObject recruitTickResponse = ReadResponseMapPayload(
+                harness,
+                theatreRecruitTickPacketId,
+                "BiancaTheatreSelectRecruitTickResponse",
+                "BiancaTheatreSelectRecruitTickRequest response");
+            JObject recruitTickStep = RequiredObject(recruitTickResponse, "Step", "BiancaTheatreSelectRecruitTickRequest response");
+            AssertEqual(342L, RequiredValue<long>(recruitTickStep, "Uid", JTokenType.Integer, "BiancaTheatreSelectRecruitTickRequest Step"), "BiancaTheatreSelectRecruitTickResponse Step Uid");
+            AssertEqual(1002L, RequiredValue<long>(recruitTickStep, "TickId", JTokenType.Integer, "BiancaTheatreSelectRecruitTickRequest Step"), "BiancaTheatreSelectRecruitTickResponse Step TickId");
+            AssertEqual(0L, RequiredValue<long>(recruitTickResponse, "Code", JTokenType.Integer, "BiancaTheatreSelectRecruitTickRequest response"), "BiancaTheatreSelectRecruitTickResponse Code");
+
+            const int theatreEndRecruitPacketId = 11_023;
+            InvokeRegisteredRequestHandler(
+                "BiancaTheatreEndRecruitRequest",
+                harness.Session,
+                theatreEndRecruitPacketId,
+                null);
+            JObject recruitCompleteStepPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "BiancaTheatreEndRecruitRequest complete recruit step push");
+            JObject recruitCompleteStep = RequiredObject(recruitCompleteStepPush, "Step", "BiancaTheatreEndRecruitRequest complete recruit step push");
+            AssertEqual(343L, RequiredValue<long>(recruitCompleteStep, "Uid", JTokenType.Integer, "BiancaTheatreEndRecruitRequest complete recruit step"), "BiancaTheatreEndRecruitRequest complete recruit step Uid");
+            AssertEqual(5L, RequiredValue<long>(recruitCompleteStep, "StepType", JTokenType.Integer, "BiancaTheatreEndRecruitRequest complete recruit step"), "BiancaTheatreEndRecruitRequest complete recruit step StepType");
+            JObject endRecruitResponse = ReadResponseMapPayload(
+                harness,
+                theatreEndRecruitPacketId,
+                "BiancaTheatreEndRecruitResponse",
+                "BiancaTheatreEndRecruitRequest response");
+            AssertEqual(0L, RequiredValue<long>(endRecruitResponse, "Code", JTokenType.Integer, "BiancaTheatreEndRecruitRequest response"), "BiancaTheatreEndRecruitResponse Code");
+
+            const int theatreRecvRewardPacketId = 11_024;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreRecvFightRewardRequest),
+                harness.Session,
+                theatreRecvRewardPacketId,
+                new BiancaTheatreRecvFightRewardRequest { Uid = 2 });
+            NotifyItemDataList fightRewardItemPush = ReadPushPayload<NotifyItemDataList>(
+                harness,
+                nameof(NotifyItemDataList),
+                "BiancaTheatreRecvFightRewardRequest item push");
+            AssertEqual(12L, fightRewardItemPush.ItemDataList.Single(item => item.Id == 96119).Count, "BiancaTheatreRecvFightRewardRequest item 96119 count");
+            JObject recvRewardResponse = ReadResponseMapPayload(
+                harness,
+                theatreRecvRewardPacketId,
+                "BiancaTheatreRecvFightRewardResponse",
+                "BiancaTheatreRecvFightRewardRequest response");
+            JArray rewardGoodsList = (JArray)RequiredToken(recvRewardResponse, "RewardGoodsList", JTokenType.Array, "BiancaTheatreRecvFightRewardRequest response");
+            AssertEqual(1, rewardGoodsList.Count, "BiancaTheatreRecvFightRewardResponse RewardGoodsList count");
+            AssertEqual(0L, RequiredValue<long>(recvRewardResponse, "Code", JTokenType.Integer, "BiancaTheatreRecvFightRewardRequest response"), "BiancaTheatreRecvFightRewardResponse Code");
+
+            const int theatreSettlePacketId = 11_025;
+            InvokeRegisteredRequestHandler(
+                "BiancaTheatreSettleAdventureRequest",
+                harness.Session,
+                theatreSettlePacketId,
+                null);
+            JObject totalExpPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreTotalExp",
+                "BiancaTheatreSettleAdventureRequest total exp push");
+            AssertEqual(5576L, RequiredValue<long>(totalExpPush, "TotalExp", JTokenType.Integer, "BiancaTheatreSettleAdventureRequest total exp push"), "NotifyBiancaTheatreTotalExp TotalExp");
+            JObject settleAdventureResponse = ReadResponseMapPayload(
+                harness,
+                theatreSettlePacketId,
+                "BiancaTheatreSettleAdventureResponse",
+                "BiancaTheatreSettleAdventureRequest response");
+            JObject settleData = RequiredObject(settleAdventureResponse, "SettleData", "BiancaTheatreSettleAdventureRequest response");
+            AssertEqual(0L, RequiredValue<long>(settleAdventureResponse, "Code", JTokenType.Integer, "BiancaTheatreSettleAdventureRequest response"), "BiancaTheatreSettleAdventureResponse Code");
+            AssertEqual(3L, RequiredValue<long>(settleData, "TeamId", JTokenType.Integer, "BiancaTheatreSettleAdventureResponse SettleData"), "BiancaTheatreSettleAdventureResponse SettleData TeamId");
+        }
+
+        private static void ValidateBiancaTheatreCompatibility()
+        {
+            const long playerId = 99_021;
+            const int lightningRecruitTickId = 4_001;
+            const int invitedLightningCharacterId = 1_041_003;
+            const int lotusCharacterId = 1_021_001;
+            const int inverseCrownCharacterId = 1_021_007;
+            const int theatreRobotId = 126_003;
+            const uint theatreFightStageId = 30_062_615;
+            long[] capturedFireRecruitCharacterIds = [1_051_003, 1_011_002, 1_031_004];
+
+            using LoopbackSessionHarness harness = new(
+                CreateDrawCompatibilityCharacter(playerId),
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                "bianca-theatre-compat-test");
+            harness.Session.stage = CreateLoginAccountCompatibilityStage(playerId);
+            long[] initialAccountRosterIds = OrderedAccountRosterIds(harness);
+
+            const int selectTeamPacketId = 61_001;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectTeamRequest),
+                harness.Session,
+                selectTeamPacketId,
+                new BiancaTheatreSelectTeamRequest { TeamId = 3 });
+            JObject initialStepPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "BiancaTheatreSelectTeamRequest initial step push");
+            JObject initialStep = RequiredObject(initialStepPush, "Step", "BiancaTheatreSelectTeamRequest initial step push");
+            AssertEqual(340L, RequiredValue<long>(initialStep, "Uid", JTokenType.Integer, "BiancaTheatreSelectTeamRequest initial step"), "BiancaTheatreSelectTeamRequest initial step Uid");
+            AssertEqual(1L, RequiredValue<long>(initialStep, "StepType", JTokenType.Integer, "BiancaTheatreSelectTeamRequest initial step"), "BiancaTheatreSelectTeamRequest initial step StepType");
+            NotifyItemDataList initialCurrencyPush = ReadPushPayload<NotifyItemDataList>(
+                harness,
+                nameof(NotifyItemDataList),
+                "BiancaTheatreSelectTeamRequest first currency push");
+            AssertEqual(3L, initialCurrencyPush.ItemDataList.Single(item => item.Id == 96119).Count, "BiancaTheatreSelectTeamRequest first currency item count");
+            _ = ReadPushPayload<NotifyItemDataList>(harness, nameof(NotifyItemDataList), "BiancaTheatreSelectTeamRequest second currency push");
+            _ = ReadPushPayload<NotifyItemDataList>(harness, nameof(NotifyItemDataList), "BiancaTheatreSelectTeamRequest third currency push");
+            BiancaTheatreSelectTeamResponse selectTeamResponse = ReadResponsePayload<BiancaTheatreSelectTeamResponse>(
+                harness,
+                selectTeamPacketId,
+                nameof(BiancaTheatreSelectTeamResponse),
+                "BiancaTheatreSelectTeamRequest response");
+            AssertEqual(0, selectTeamResponse.Code, "BiancaTheatreSelectTeamResponse Code");
+
+            const int selectItemPacketId = 61_002;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectItemRewardRequest),
+                harness.Session,
+                selectItemPacketId,
+                new BiancaTheatreSelectItemRewardRequest { InnerItemId = 26 });
+            JObject addItemPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddItem",
+                "BiancaTheatreSelectItemRewardRequest add item push");
+            JArray addedItems = (JArray)RequiredToken(addItemPush, "BiancaTheatreItems", JTokenType.Array, "BiancaTheatreSelectItemRewardRequest add item push");
+            AssertEqual(1, addedItems.Count, "BiancaTheatreSelectItemRewardRequest add item count");
+            JObject addedItem = (JObject)addedItems[0]!;
+            AssertEqual(26L, RequiredValue<long>(addedItem, "ItemId", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest add item"), "BiancaTheatreSelectItemRewardRequest added ItemId");
+            JObject recruitChoicePush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "BiancaTheatreSelectItemRewardRequest recruit choice push");
+            JObject recruitChoiceStep = RequiredObject(recruitChoicePush, "Step", "BiancaTheatreSelectItemRewardRequest recruit choice push");
+            AssertEqual(341L, RequiredValue<long>(recruitChoiceStep, "Uid", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest recruit choice step"), "BiancaTheatreSelectItemRewardRequest recruit choice step Uid");
+            JObject selectItemResponse = ReadResponseMapPayload(
+                harness,
+                selectItemPacketId,
+                "BiancaTheatreSelectItemRewardResponse",
+                "BiancaTheatreSelectItemRewardRequest response");
+            AssertEqual(26L, RequiredValue<long>(selectItemResponse, "InnerItemId", JTokenType.Integer, "BiancaTheatreSelectItemRewardRequest response"), "BiancaTheatreSelectItemRewardResponse InnerItemId");
+
+            const int recruitTickPacketId = 61_003;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectRecruitTickRequest),
+                harness.Session,
+                recruitTickPacketId,
+                new BiancaTheatreSelectRecruitTickRequest { TickId = lightningRecruitTickId });
+            JObject recruitTickResponse = ReadResponseMapPayload(
+                harness,
+                recruitTickPacketId,
+                "BiancaTheatreSelectRecruitTickResponse",
+                "BiancaTheatreSelectRecruitTickRequest response");
+            JObject recruitTickStep = RequiredObject(recruitTickResponse, "Step", "BiancaTheatreSelectRecruitTickRequest response");
+            AssertEqual(342L, RequiredValue<long>(recruitTickStep, "Uid", JTokenType.Integer, "BiancaTheatreSelectRecruitTickResponse Step"), "BiancaTheatreSelectRecruitTickResponse Step Uid");
+            AssertEqual((long)lightningRecruitTickId, RequiredValue<long>(recruitTickStep, "TickId", JTokenType.Integer, "BiancaTheatreSelectRecruitTickResponse Step"), "BiancaTheatreSelectRecruitTickResponse Step TickId");
+            JArray refreshCharacterIds = (JArray)RequiredToken(recruitTickStep, "RefreshCharacterIds", JTokenType.Array, "BiancaTheatreSelectRecruitTickResponse Step");
+            long[] refreshedCharacterIds = refreshCharacterIds.Select(characterId => characterId!.Value<long>()).ToArray();
+            if (!refreshedCharacterIds.Contains(invitedLightningCharacterId))
+                throw new InvalidDataException($"BiancaTheatreSelectRecruitTickResponse lightning invitation: expected RefreshCharacterIds to include Bianca: Veritas {invitedLightningCharacterId}, got [{string.Join(", ", refreshedCharacterIds)}].");
+            AssertEqual(
+                false,
+                refreshedCharacterIds.SequenceEqual(capturedFireRecruitCharacterIds),
+                "BiancaTheatreSelectRecruitTickResponse lightning invitation must not replay captured fire RefreshCharacterIds");
+
+            const int recruitCharacterPacketId = 61_004;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreRecruitCharacterRequest),
+                harness.Session,
+                recruitCharacterPacketId,
+                new BiancaTheatreRecruitCharacterRequest { CharacterId = lotusCharacterId });
+            JObject recruitCharacterResponse = ReadResponseMapPayload(
+                harness,
+                recruitCharacterPacketId,
+                "BiancaTheatreRecruitCharacterResponse",
+                "BiancaTheatreRecruitCharacterRequest response");
+            AssertEqual(0L, RequiredValue<long>(recruitCharacterResponse, "Code", JTokenType.Integer, "BiancaTheatreRecruitCharacterRequest response"), "BiancaTheatreRecruitCharacterResponse Code");
+            AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "BiancaTheatreRecruitCharacterRequest stores mode-local Lucia: Lotus without changing the account roster");
+
+            const int endRecruitPacketId = 61_005;
+            InvokeRegisteredRequestHandler("BiancaTheatreEndRecruitRequest", harness.Session, endRecruitPacketId, null);
+            JObject completeRecruitPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "BiancaTheatreEndRecruitRequest complete step push");
+            JObject completeRecruitStep = RequiredObject(completeRecruitPush, "Step", "BiancaTheatreEndRecruitRequest complete step push");
+            AssertEqual(343L, RequiredValue<long>(completeRecruitStep, "Uid", JTokenType.Integer, "BiancaTheatreEndRecruitRequest complete step"), "BiancaTheatreEndRecruitRequest complete step Uid");
+            JObject endRecruitResponse = ReadResponseMapPayload(
+                harness,
+                endRecruitPacketId,
+                "BiancaTheatreEndRecruitResponse",
+                "BiancaTheatreEndRecruitRequest response");
+            AssertEqual(0L, RequiredValue<long>(endRecruitResponse, "Code", JTokenType.Integer, "BiancaTheatreEndRecruitRequest response"), "BiancaTheatreEndRecruitResponse Code");
+
+            const int setSingleTeamPacketId = 61_006;
+            BiancaTheatreSetSingleTeamRequest setSingleTeamRequest = new()
+            {
+                TeamData = new Dictionary<string, object?>
+                {
+                    ["CaptainPos"] = 1,
+                    ["FirstFightPos"] = 1,
+                    ["SettleCgIndex"] = 0,
+                    ["EnterCgIndex"] = 0,
+                    ["TeamIndex"] = 0,
+                    ["CardIds"] = new[] { 0, 0, 0 },
+                    ["RobotIds"] = new[] { theatreRobotId, 0, 0 }
+                }
+            };
+            BiancaTheatreSetSingleTeamRequest setSingleTeamRoundTrip = MessagePackSerializer.Deserialize<BiancaTheatreSetSingleTeamRequest>(
+                MessagePackSerializer.Serialize(setSingleTeamRequest));
+            AssertTeamDataIntegerList(
+                (object?)setSingleTeamRoundTrip.TeamData,
+                "CardIds",
+                new long[] { 0, 0, 0 },
+                "BiancaTheatreSetSingleTeamRequest TeamData.CardIds MessagePack round-trip");
+            AssertTeamDataIntegerList(
+                (object?)setSingleTeamRoundTrip.TeamData,
+                "RobotIds",
+                new long[] { theatreRobotId, 0, 0 },
+                "BiancaTheatreSetSingleTeamRequest TeamData.RobotIds MessagePack round-trip");
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSetSingleTeamRequest),
+                harness.Session,
+                setSingleTeamPacketId,
+                setSingleTeamRoundTrip);
+            JObject setSingleTeamResponse = ReadResponseMapPayload(
+                harness,
+                setSingleTeamPacketId,
+                "BiancaTheatreSetSingleTeamResponse",
+                "BiancaTheatreSetSingleTeamRequest response");
+            AssertEqual(0L, RequiredValue<long>(setSingleTeamResponse, "Code", JTokenType.Integer, "BiancaTheatreSetSingleTeamRequest response"), "BiancaTheatreSetSingleTeamResponse Code");
+            AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "BiancaTheatreSetSingleTeamRequest robot team keeps Lucia: Lotus out of the account roster");
+
+            const int preFightPacketId = 61_007;
+            PreFightRequest preFightRequest = new()
+            {
+                PreFightData = new()
+                {
+                    ChallengeCount = 1,
+                    StageId = theatreFightStageId,
+                    CardIds = [0, 0, 0],
+                    RobotIds = [theatreRobotId, 0, 0],
+                    FirstFightPos = 1,
+                    CaptainPos = 1
+                }
+            };
+            PreFightRequest preFightRoundTrip = MessagePackSerializer.Deserialize<PreFightRequest>(
+                MessagePackSerializer.Serialize(preFightRequest));
+            AssertEqual(theatreFightStageId, preFightRoundTrip.PreFightData.StageId, "Bianca Theatre PreFightRequest theatre fight StageId MessagePack round-trip");
+            AssertIntegerList([0, 0, 0], preFightRoundTrip.PreFightData.CardIds!.Select(cardId => (long)cardId).ToArray(), "Bianca Theatre PreFightRequest CardIds MessagePack round-trip");
+            AssertIntegerList([theatreRobotId, 0, 0], preFightRoundTrip.PreFightData.RobotIds!.Select(robotId => (long)robotId).ToArray(), "Bianca Theatre PreFightRequest RobotIds MessagePack round-trip");
+            InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, preFightPacketId, preFightRoundTrip);
+            PreFightResponse preFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness,
+                preFightPacketId,
+                nameof(PreFightResponse),
+                "Bianca Theatre PreFightRequest Lucia: Lotus robot response");
+            AssertEqual(0, preFightResponse.Code, "Bianca Theatre PreFightResponse Code");
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException("Bianca Theatre PreFightResponse: expected FightData for accepted theatre fight.");
+            AssertEqual(theatreFightStageId, preFightResponse.FightData.StageId, "Bianca Theatre PreFightResponse FightData.StageId");
+            AssertPreFightDeployedCharacterIds(
+                preFightResponse,
+                playerId,
+                [lotusCharacterId],
+                "Bianca Theatre PreFightResponse selected Lucia: Lotus robot");
+            AssertPreFightDoesNotDeployCharacter(
+                preFightResponse,
+                playerId,
+                inverseCrownCharacterId,
+                "Bianca Theatre PreFightResponse must not deploy Lucia: Inverse Crown");
+            AssertBiancaTheatreRobotNpcSlot(
+                preFightResponse,
+                playerId,
+                expectedSlot: 0,
+                expectedCharacterId: lotusCharacterId,
+                expectedRobotId: theatreRobotId,
+                "Bianca Theatre PreFightResponse player NpcData[0]");
+            AssertPopulatedDynamicPayload(preFightResponse.FightData.NpcGroupList, "Bianca Theatre PreFightResponse FightData.NpcGroupList enemies");
+            AssertPopulatedDynamicPayload(preFightResponse.FightData.StageParams, "Bianca Theatre PreFightResponse FightData.StageParams");
+            AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "Bianca Theatre PreFight deploy keeps Lucia: Lotus out of the account roster");
+
+            const int fightSettlePacketId = 61_008;
+            FightSettleRequest fightSettleRequest = CreateMissingStageSettleRequest(
+                theatreFightStageId,
+                preFightResponse.FightData.FightId,
+                playerId);
+            fightSettleRequest.Result.IsWin = false;
+            fightSettleRequest.Result.IsForceExit = true;
+            FightSettleRequest fightSettleRoundTrip = MessagePackSerializer.Deserialize<FightSettleRequest>(
+                MessagePackSerializer.Serialize(fightSettleRequest));
+            AssertEqual(false, fightSettleRoundTrip.Result.IsWin, "Bianca Theatre force-exit FightSettleRequest Result.IsWin MessagePack round-trip");
+            AssertEqual(true, fightSettleRoundTrip.Result.IsForceExit, "Bianca Theatre force-exit FightSettleRequest Result.IsForceExit MessagePack round-trip");
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                fightSettlePacketId,
+                fightSettleRoundTrip);
+            (JObject adventureSettlePush, FightSettleResponse fightSettleResponse) = ReadBiancaTheatreForceExitSettleResult(
+                harness,
+                fightSettlePacketId,
+                "Bianca Theatre force-exit FightSettleRequest");
+            JObject adventureSettleData = RequiredObject(adventureSettlePush, "SettleData", "NotifyBiancaTheatreAdventureSettle");
+            AssertEqual(3L, RequiredValue<long>(adventureSettleData, "TeamId", JTokenType.Integer, "NotifyBiancaTheatreAdventureSettle SettleData"), "NotifyBiancaTheatreAdventureSettle SettleData.TeamId");
+            JArray adventureSettleCharacters = (JArray)RequiredToken(adventureSettleData, "Characters", JTokenType.Array, "NotifyBiancaTheatreAdventureSettle SettleData");
+            long[] adventureSettleCharacterIds = adventureSettleCharacters
+                .Select(character => RequiredValue<long>((JObject)character!, "CharacterId", JTokenType.Integer, "NotifyBiancaTheatreAdventureSettle SettleData Characters"))
+                .ToArray();
+            if (!adventureSettleCharacterIds.Contains(lotusCharacterId))
+                throw new InvalidDataException($"NotifyBiancaTheatreAdventureSettle SettleData.Characters: expected recruited character {lotusCharacterId}, got [{string.Join(", ", adventureSettleCharacterIds)}].");
+            AssertEqual(0, fightSettleResponse.Code, "Bianca Theatre force-exit FightSettleResponse Code");
+            if (fightSettleResponse.Settle is null)
+                throw new InvalidDataException("Bianca Theatre force-exit FightSettleResponse: expected Settle payload.");
+            AssertEqual(false, fightSettleResponse.Settle.IsWin, "Bianca Theatre force-exit FightSettleResponse Settle.IsWin");
+            AssertEqual(theatreFightStageId, (uint)fightSettleResponse.Settle.StageId, "Bianca Theatre force-exit FightSettleResponse Settle.StageId");
+            if (harness.Session.fight is not null)
+                throw new InvalidDataException("Bianca Theatre force-exit FightSettleRequest: expected session fight state to be cleared.");
+            AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "Bianca Theatre force-exit settle keeps Lucia: Lotus out of the account roster");
+
+            const int settlePacketId = 61_009;
+            InvokeRegisteredRequestHandler("BiancaTheatreSettleAdventureRequest", harness.Session, settlePacketId, null);
+            JObject totalExpPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreTotalExp",
+                "BiancaTheatreSettleAdventureRequest total exp push");
+            AssertEqual(5576L, RequiredValue<long>(totalExpPush, "TotalExp", JTokenType.Integer, "BiancaTheatreSettleAdventureRequest total exp push"), "NotifyBiancaTheatreTotalExp TotalExp");
+            JObject settleResponse = ReadResponseMapPayload(
+                harness,
+                settlePacketId,
+                "BiancaTheatreSettleAdventureResponse",
+                "BiancaTheatreSettleAdventureRequest response");
+            AssertEqual(0L, RequiredValue<long>(settleResponse, "Code", JTokenType.Integer, "BiancaTheatreSettleAdventureRequest response"), "BiancaTheatreSettleAdventureResponse Code");
+            JObject settleData = RequiredObject(settleResponse, "SettleData", "BiancaTheatreSettleAdventureRequest response");
+            JArray settleCharacters = (JArray)RequiredToken(settleData, "Characters", JTokenType.Array, "BiancaTheatreSettleAdventureResponse SettleData");
+            long[] settledCharacterIds = settleCharacters
+                .Select(character => RequiredValue<long>((JObject)character!, "CharacterId", JTokenType.Integer, "BiancaTheatreSettleAdventureResponse SettleData Characters"))
+                .ToArray();
+            if (!settledCharacterIds.Contains(lotusCharacterId))
+                throw new InvalidDataException($"BiancaTheatreSettleAdventureResponse SettleData.Characters: expected recruited character {lotusCharacterId}, got [{string.Join(", ", settledCharacterIds)}].");
+
+            const int strengthenPacketId = 61_010;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreStrengthenRequest),
+                harness.Session,
+                strengthenPacketId,
+                new BiancaTheatreStrengthenRequest { Id = 10 });
+            JObject strengthenResponse = ReadResponseMapPayload(
+                harness,
+                strengthenPacketId,
+                "BiancaTheatreStrengthenResponse",
+                "BiancaTheatreStrengthenRequest response");
+            AssertEqual(20176035L, RequiredValue<long>(strengthenResponse, "Code", JTokenType.Integer, "BiancaTheatreStrengthenRequest response"), "BiancaTheatreStrengthenResponse captured rejection Code");
+
+            static long[] OrderedAccountRosterIds(LoopbackSessionHarness harness)
+            {
+                return harness.Session.character.Characters
+                    .Select(character => (long)character.Id)
+                    .Order()
+                    .ToArray();
+            }
+
+            static void AssertAccountRosterUnchanged(LoopbackSessionHarness harness, IReadOnlyList<long> expectedRosterIds, string name)
+            {
+                AssertIntegerList(expectedRosterIds, OrderedAccountRosterIds(harness), name);
+            }
+
+            static void AssertTeamDataIntegerList(object? teamData, string fieldName, IReadOnlyList<long> expected, string name)
+            {
+                System.Collections.IDictionary teamDataMap = RequiredDynamicMap(teamData, "BiancaTheatreSetSingleTeamRequest TeamData MessagePack round-trip");
+                IReadOnlyList<long> actual = ReadIntegerList(RequiredDynamicValue(teamDataMap, fieldName, name), name);
+                AssertIntegerList(expected, actual, name);
+            }
+
+            static void AssertPreFightDoesNotDeployCharacter(
+                PreFightResponse preFightResponse,
+                long playerId,
+                int forbiddenCharacterId,
+                string name)
+            {
+                PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData playerRole = RequiredPlayerRole(preFightResponse, playerId, name);
+                long[] deployedCharacterIds = playerRole.NpcData
+                    .OrderBy(npc => npc.Key)
+                    .Select(npc => (long)RequiredNpcCharacterId(npc, name))
+                    .ToArray();
+                if (deployedCharacterIds.Contains(forbiddenCharacterId))
+                    throw new InvalidDataException($"{name}: forbidden character {forbiddenCharacterId} was deployed in [{string.Join(", ", deployedCharacterIds)}].");
+            }
+
+            static void AssertBiancaTheatreRobotNpcSlot(
+                PreFightResponse preFightResponse,
+                long playerId,
+                int expectedSlot,
+                int expectedCharacterId,
+                int expectedRobotId,
+                string name)
+            {
+                PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData playerRole = RequiredPlayerRole(preFightResponse, playerId, name);
+                if (!playerRole.NpcData.TryGetValue(expectedSlot, out dynamic? npcValue))
+                    throw new InvalidDataException($"{name}: expected NpcData slot {expectedSlot}.");
+                System.Collections.IDictionary npcData = RequiredDynamicMap((object?)npcValue, name);
+                System.Collections.IDictionary character = RequiredDynamicMap(
+                    RequiredDynamicValue(npcData, "Character", name),
+                    $"{name}.Character");
+                AssertEqual(expectedCharacterId, RequiredDynamicInteger(character, "Id", $"{name}.Character"), $"{name}.Character.Id");
+                AssertEqual(true, RequiredDynamicBoolean(npcData, "IsRobot", name), $"{name}.IsRobot");
+                AssertEqual(expectedRobotId, RequiredDynamicInteger(npcData, "RobotId", name), $"{name}.RobotId");
+            }
+
+            static PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData RequiredPlayerRole(
+                PreFightResponse preFightResponse,
+                long playerId,
+                string name)
+            {
+                if (preFightResponse.FightData is null)
+                    throw new InvalidDataException($"{name}: expected FightData.");
+                return preFightResponse.FightData.RoleData.SingleOrDefault(role => role.Id == (uint)playerId)
+                    ?? throw new InvalidDataException($"{name}: expected player RoleData.");
+            }
+
+            static void AssertPopulatedDynamicPayload(object? value, string name)
+            {
+                if (value is null)
+                    throw new InvalidDataException($"{name}: expected populated payload, got nil.");
+                if (value is System.Collections.IDictionary map)
+                {
+                    if (map.Count == 0)
+                        throw new InvalidDataException($"{name}: expected populated map.");
+                    return;
+                }
+                if (value is System.Collections.IEnumerable values && value is not string)
+                {
+                    foreach (object? item in values)
+                    {
+                        if (item is not null)
+                            return;
+                    }
+
+                    throw new InvalidDataException($"{name}: expected at least one non-nil entry.");
+                }
+                if (value is string text && text.Length == 0)
+                    throw new InvalidDataException($"{name}: expected non-empty text.");
+            }
+
+            static (JObject AdventureSettlePush, FightSettleResponse Response) ReadBiancaTheatreForceExitSettleResult(
+                LoopbackSessionHarness harness,
+                int expectedPacketId,
+                string name)
+            {
+                JObject adventureSettlePush = ReadPushMapPayload(
+                    harness,
+                    "NotifyBiancaTheatreAdventureSettle",
+                    $"{name} adventure-settle push");
+                Packet responsePacket = harness.ReadPacket($"{name} response");
+                AssertEqual(Packet.ContentType.Response, responsePacket.Type, $"{name} response packet type");
+                Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(responsePacket.Content);
+                AssertEqual(expectedPacketId, response.Id, $"{name} response packet id");
+                AssertEqual(nameof(FightSettleResponse), response.Name, $"{name} response packet name");
+                return (adventureSettlePush, MessagePackSerializer.Deserialize<FightSettleResponse>(response.Content));
             }
         }
 
@@ -14263,6 +14931,25 @@ namespace AscNet.Test
             return MessagePackSerializer.Deserialize<TPush>(push.Content);
         }
 
+        private static JObject ReadPushMapPayload(LoopbackSessionHarness harness, string expectedPushName, string name)
+        {
+            Packet packet = harness.ReadPacket(name);
+            AssertEqual(Packet.ContentType.Push, packet.Type, $"{name} packet type");
+            Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+            AssertEqual(expectedPushName, push.Name, $"{name} packet name");
+            return JObject.Parse(MessagePackSerializer.ConvertToJson(push.Content));
+        }
+
+        private static JObject ReadResponseMapPayload(LoopbackSessionHarness harness, int expectedPacketId, string expectedResponseName, string name)
+        {
+            Packet packet = harness.ReadPacket(name);
+            AssertEqual(Packet.ContentType.Response, packet.Type, $"{name} packet type");
+            Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+            AssertEqual(expectedPacketId, response.Id, $"{name} packet id");
+            AssertEqual(expectedResponseName, response.Name, $"{name} packet name");
+            return JObject.Parse(MessagePackSerializer.ConvertToJson(response.Content));
+        }
+
         private static MethodInfo RequiredMethod(Type declaringType, string name, BindingFlags bindingFlags)
         {
             return RequiredMethod(declaringType, name, bindingFlags, Type.EmptyTypes);
@@ -16982,6 +17669,8 @@ namespace AscNet.Test
                     AssertCurrentClientNoticePayload(JObject.Parse(body), endpoint);
                 }
 
+                await AssertNoticeVersionTraversalDoesNotServeExternalFixture(client);
+
                 using HttpResponseMessage picResponse = await client.GetAsync("/prod/client/notice/pic/6a1e1534f1b4a13fd8bf4904.png");
                 byte[] picBody = await picResponse.Content.ReadAsByteArrayAsync();
                 if (picResponse.StatusCode != HttpStatusCode.OK)
@@ -17012,6 +17701,80 @@ namespace AscNet.Test
             {
                 await app.StopAsync();
             }
+        }
+
+        private static async Task AssertNoticeVersionTraversalDoesNotServeExternalFixture(HttpClient client)
+        {
+            const string sentinelId = "ascnet-notice-version-traversal-sentinel";
+            string currentFixturePath = ResourcePath("Configs", "Notices", "4.5.0", "SecondMenuNotice.json");
+            string noticesRoot = Directory.GetParent(Path.GetDirectoryName(currentFixturePath)!)!.FullName;
+            string configsRoot = Directory.GetParent(noticesRoot)!.FullName;
+            string externalFixturePath = Path.Combine(configsRoot, "SecondMenuNotice.json");
+            string? previousExternalFixture = File.Exists(externalFixturePath)
+                ? File.ReadAllText(externalFixturePath)
+                : null;
+
+            JObject externalFixture = new()
+            {
+                ["Id"] = sentinelId,
+                ["ModifyTime"] = 1,
+                ["Content"] = new JArray(new JObject
+                {
+                    ["Id"] = "sentinel",
+                    ["Title"] = "Traversal Sentinel",
+                    ["SubTitle"] = "This file is outside Configs/Notices/<version>.",
+                    ["JumpType"] = "1",
+                    ["JumpAddr"] = "https://invalid.ascnet.local/traversal-sentinel",
+                    ["BeginTime"] = 0,
+                    ["EndTime"] = 1,
+                    ["StyleType"] = "2",
+                    ["AppearanceDay"] = new JArray(),
+                    ["AppearanceTime"] = new JArray(),
+                    ["TipResetTime"] = 0,
+                    ["ModifyTime"] = "1"
+                }),
+                ["LoginPlatformList"] = new JArray(0, 1, 2)
+            };
+
+            try
+            {
+                File.WriteAllText(externalFixturePath, externalFixture.ToString(Formatting.None));
+
+                Microsoft.AspNetCore.Http.DefaultHttpContext directContext = new();
+                directContext.Request.RouteValues["version"] = "..";
+                Type configController = Type.GetType("AscNet.SDKServer.Controllers.ConfigController, AscNet.SDKServer", throwOnError: true)!;
+                MethodInfo handleSecondMenuNoticeRequest = configController.GetMethod("HandleSecondMenuNoticeRequest", BindingFlags.NonPublic | BindingFlags.Static)!;
+                string directBody = (string)handleSecondMenuNoticeRequest.Invoke(null, [directContext])!;
+                AssertNoticeTraversalBodyDoesNotServeExternalFixture(directBody, "SecondMenuNotice direct route value '..'", sentinelId, externalFixturePath);
+
+                string endpoint = "/prod/client/notice/config/prod-encdn-tx/com.kurogame.pc.punishing.grayraven.en/.%2E/SecondMenuNotice.json";
+                using HttpResponseMessage response = await client.GetAsync(endpoint);
+                string body = await response.Content.ReadAsStringAsync();
+
+                if (response.StatusCode == HttpStatusCode.OK)
+                {
+                    AssertNoticeTraversalBodyDoesNotServeExternalFixture(body, endpoint, sentinelId, externalFixturePath);
+                }
+            }
+            finally
+            {
+                if (previousExternalFixture is null)
+                {
+                    if (File.Exists(externalFixturePath))
+                        File.Delete(externalFixturePath);
+                }
+                else
+                {
+                    File.WriteAllText(externalFixturePath, previousExternalFixture);
+                }
+            }
+        }
+
+        private static void AssertNoticeTraversalBodyDoesNotServeExternalFixture(string body, string name, string sentinelId, string externalFixturePath)
+        {
+            JObject payload = JObject.Parse(body);
+            if (string.Equals(payload.Value<string>("Id"), sentinelId, StringComparison.Ordinal))
+                throw new InvalidDataException($"{name}: unsafe notice version traversal served fixture outside Configs/Notices/<version>: {externalFixturePath}");
         }
 
         private static void AssertCurrentClientNoticePayload(JObject payload, string endpoint)

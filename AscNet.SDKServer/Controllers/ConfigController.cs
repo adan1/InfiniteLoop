@@ -12,7 +12,7 @@ namespace AscNet.SDKServer.Controllers
 
         static ConfigController()
         {
-            versions = JsonConvert.DeserializeObject<Dictionary<string, ServerVersionConfig>>(File.ReadAllText("./Configs/version_config.json"))!;
+            versions = JsonConvert.DeserializeObject<Dictionary<string, ServerVersionConfig>>(File.ReadAllText(JsonSnapshot.ResolvePath("Configs/version_config.json")))!;
         }
 
         public static void Register(WebApplication app)
@@ -220,11 +220,26 @@ namespace AscNet.SDKServer.Controllers
 
         private static IEnumerable<string> NoticeVersionDirectories()
         {
-            string noticesRoot = Path.Combine("Configs", "Notices");
+            string noticesRoot = JsonSnapshot.ResolveDirectoryPath(Path.Combine("Configs", "Notices"));
             if (!Directory.Exists(noticesRoot))
                 return Array.Empty<string>();
 
             return Directory.GetDirectories(noticesRoot).OrderByDescending(Path.GetFileName);
+        }
+
+        private static bool TryGetNoticeVersionDirectory(string version, out string versionDirectory)
+        {
+            foreach (string candidate in NoticeVersionDirectories())
+            {
+                if (string.Equals(Path.GetFileName(candidate), version, StringComparison.OrdinalIgnoreCase))
+                {
+                    versionDirectory = candidate;
+                    return true;
+                }
+            }
+
+            versionDirectory = string.Empty;
+            return false;
         }
 
         private static bool TryBuildNoticeHtml(string fileName, out string html)
@@ -481,7 +496,13 @@ namespace AscNet.SDKServer.Controllers
         private static bool TryReadNoticeFixture(HttpContext ctx, string fileName, out string fixtureJson)
         {
             string version = GetRouteValue(ctx, "version");
-            string path = Path.Combine("Configs", "Notices", version, fileName);
+            if (!TryGetNoticeVersionDirectory(version, out string versionDirectory))
+            {
+                fixtureJson = string.Empty;
+                return false;
+            }
+
+            string path = Path.Combine(versionDirectory, fileName);
             if (!File.Exists(path))
             {
                 fixtureJson = string.Empty;

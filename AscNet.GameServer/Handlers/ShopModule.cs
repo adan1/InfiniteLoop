@@ -199,16 +199,11 @@ namespace AscNet.GameServer.Handlers
 
         private static Dictionary<uint, ClientShop> LoadShopSnapshot()
         {
-            string path = File.Exists(ShopSnapshotPath)
-                ? ShopSnapshotPath
-                : Path.Combine("Resources", ShopSnapshotPath);
-
-            if (!File.Exists(path))
+            JObject root = JsonSnapshot.LoadObject(ShopSnapshotPath);
+            if (!root.HasValues)
             {
                 return new Dictionary<uint, ClientShop>();
             }
-
-            JObject root = JObject.Parse(File.ReadAllText(path));
             Dictionary<uint, ClientShop> shops = new();
             foreach (JProperty shopProperty in root.Properties())
             {

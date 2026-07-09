@@ -260,6 +260,12 @@ namespace AscNet.Common.Database
         [BsonElement("red_point_records")]
         public RedPointRecords RedPointRecords { get; set; } = new();
 
+        [BsonElement("assist_character_id")]
+        public int AssistCharacterId { get; set; }
+
+        [BsonElement("unlock_comics")]
+        public List<int> UnlockComics { get; set; } = AscNet.Common.ArchiveDefaults.CreateDefaultUnlockedArchiveComics();
+
         [BsonElement("life_tree_data")]
         public NotifyLifeTreeData LifeTreeData { get; set; } = new();
 

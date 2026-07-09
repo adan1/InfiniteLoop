@@ -103,6 +103,31 @@ namespace AscNet.GameServer.Handlers
         public int Code { get; set; }
     }
 
+    [MessagePackObject(true)]
+    public class ChangeAssistCharIdRequest
+    {
+        public int AssistCharId { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class ChangeAssistCharIdResponse
+    {
+        public int Code { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class UnlockArchiveComicsRequest
+    {
+        public List<int> Ids { get; set; } = new();
+    }
+
+    [MessagePackObject(true)]
+    public class UnlockArchiveComicsResponse
+    {
+        public int Code { get; set; }
+        public List<int> SuccessIds { get; set; } = new();
+    }
+
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
 
@@ -121,6 +146,8 @@ namespace AscNet.GameServer.Handlers
             10010204
         ];
         private const long DefaultChatBoardId = 25000001;
+        private const int ChangeAssistCharIdRejectedCode = 20002006;
+
 
         private static readonly long[] DefaultChatBoardIds =
         [
@@ -287,6 +314,62 @@ namespace AscNet.GameServer.Handlers
             SyncReadGameNoticeRequest request = packet.Deserialize<SyncReadGameNoticeRequest>();
             SyncGameNoticeInfos(session.player, request.GameNoticeInfos);
             session.SendResponse(new SyncReadGameNoticeResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("ChangeAssistCharIdRequest")]
+        public static void ChangeAssistCharIdRequestHandler(Session session, Packet.Request packet)
+        {
+            ChangeAssistCharIdRequest request = packet.Deserialize<ChangeAssistCharIdRequest>();
+            int currentAssistCharacterId = ResolveAssistCharacterId(session);
+
+            ChangeAssistCharIdResponse response = new();
+            if (request.AssistCharId == currentAssistCharacterId
+                || !session.character.Characters.Any(character => (int)character.Id == request.AssistCharId))
+            {
+                response.Code = ChangeAssistCharIdRejectedCode;
+                session.SendResponse(response, packet.Id);
+                return;
+            }
+
+            session.player.AssistCharacterId = request.AssistCharId;
+            session.player.Save();
+            session.SendResponse(response, packet.Id);
+        }
+
+        [RequestPacketHandler("UnlockArchiveComicsRequest")]
+        public static void UnlockArchiveComicsRequestHandler(Session session, Packet.Request packet)
+        {
+            UnlockArchiveComicsRequest request = packet.Deserialize<UnlockArchiveComicsRequest>();
+            List<int> successIds = UnlockArchiveComics(session.player, request.Ids);
+            session.SendResponse(new UnlockArchiveComicsResponse
+            {
+                Code = 0,
+                SuccessIds = successIds
+            }, packet.Id);
+        }
+
+        private static List<int> UnlockArchiveComics(Player player, List<int>? requestedIds)
+        {
+            List<int> successIds = new();
+            if (requestedIds is null || requestedIds.Count == 0)
+                return successIds;
+
+            player.UnlockComics ??= new();
+            foreach (int requestedId in requestedIds)
+            {
+                if (requestedId <= 0 || player.UnlockComics.Contains(requestedId) || successIds.Contains(requestedId))
+                    continue;
+
+                player.UnlockComics.Add(requestedId);
+                successIds.Add(requestedId);
+            }
+
+            if (successIds.Count == 0)
+                return successIds;
+
+            player.UnlockComics.Sort();
+            player.Save();
+            return successIds;
         }
 
         private static void SyncGameNoticeInfos(Player player, List<RedPointGameNoticeInfo>? gameNoticeInfos)
@@ -837,7 +920,7 @@ namespace AscNet.GameServer.Handlers
 
         private static byte[] SerializeStartupPayload(Dictionary<string, object?> payload)
         {
-            return MessagePackSerializer.Serialize(payload);
+            return MessagePackPayloads.Serialize(payload);
         }
 
         private static void SendEmptyStartupPush(Session session, string name)
@@ -874,6 +957,35 @@ Sorry for the inconvenience.
             return notifyMails;
         }
 
+
+        private static int ResolveAssistCharacterId(Session session)
+        {
+            int savedAssistCharacterId = session.player.AssistCharacterId;
+            if (savedAssistCharacterId != 0
+                && session.character.Characters.Any(character => (int)character.Id == savedAssistCharacterId))
+            {
+                return savedAssistCharacterId;
+            }
+
+            int fallbackAssistCharacterId = (int)(session.character.Characters.FirstOrDefault()?.Id ?? 0);
+            if (session.player.AssistCharacterId != fallbackAssistCharacterId)
+                session.player.AssistCharacterId = fallbackAssistCharacterId;
+
+            return fallbackAssistCharacterId;
+        }
+
+        private static NotifyArchiveLoginData BuildNotifyArchiveLoginData(Player player)
+        {
+            List<int> unlockComics = player.UnlockComics is { Count: > 0 }
+                ? player.UnlockComics.Distinct().Order().ToList()
+                : ArchiveDefaults.CreateDefaultUnlockedArchiveComics();
+
+            return new NotifyArchiveLoginData
+            {
+                UnlockComics = unlockComics
+            };
+        }
+
         // TODO: Move somewhere else, also split.
         static void DoLogin(Session session)
         {
@@ -902,7 +1014,7 @@ Sorry for the inconvenience.
             {
                 AssistData = new()
                 {
-                    AssistCharacterId = session.character.Characters.First().Id
+                    AssistCharacterId = (uint)ResolveAssistCharacterId(session)
                 }
             };
 
@@ -958,7 +1070,7 @@ Sorry for the inconvenience.
             {
                 EquipGuideData = new()
             });
-            session.SendPush(new NotifyArchiveLoginData());
+            session.SendPush(BuildNotifyArchiveLoginData(session.player));
             SendEmptyStartupPush(session, "NotifyLoginAwarenessInfo");
             session.SendPush(notifyChatLoginData);
             session.SendPush(new NotifySocialData());

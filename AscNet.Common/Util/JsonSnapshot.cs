@@ -76,7 +76,7 @@ namespace AscNet.Common.Util
             return result;
         }
 
-        private static string ResolvePath(string relativePath)
+        public static string ResolvePath(string relativePath)
         {
             foreach (string root in CandidateRoots())
             {
@@ -86,6 +86,22 @@ namespace AscNet.Common.Util
 
                 string resourcePath = Path.Combine(root, "Resources", relativePath);
                 if (File.Exists(resourcePath))
+                    return resourcePath;
+            }
+
+            return Path.Combine("Resources", relativePath);
+        }
+
+        public static string ResolveDirectoryPath(string relativePath)
+        {
+            foreach (string root in CandidateRoots())
+            {
+                string directPath = Path.Combine(root, relativePath);
+                if (Directory.Exists(directPath))
+                    return directPath;
+
+                string resourcePath = Path.Combine(root, "Resources", relativePath);
+                if (Directory.Exists(resourcePath))
                     return resourcePath;
             }
 

@@ -51,7 +51,8 @@ namespace AscNet.Common.Util
 
             try
             {
-                using (var reader = new StreamReader(T.File))
+                string path = JsonSnapshot.ResolvePath(T.File);
+                using (var reader = new StreamReader(path))
                 {
                     // Read the header line to get column names
                     string headerLine = reader.ReadLine()!;
@@ -70,7 +71,7 @@ namespace AscNet.Common.Util
                         result.Add(obj);
                     }
                 }
-                c.Debug($"{typeof(T).Name} Loaded From {T.File}");
+                c.Debug($"{typeof(T).Name} Loaded From {path}");
 
                 cache.Add(typeof(T), result);
             }
@@ -81,6 +82,7 @@ namespace AscNet.Common.Util
 
             return result;
         }
+
 
         static T MapToObject<T>(string[] columnNames, string[] values) where T : ITable
         {

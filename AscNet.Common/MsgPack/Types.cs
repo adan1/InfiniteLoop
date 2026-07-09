@@ -624,6 +624,7 @@ namespace AscNet.Common.MsgPack
         public List<dynamic> PartnerSettings { get; set; } = new();
         public List<UInt32> UnlockPvDetails { get; set; } = new();
         public List<Int32> UnlockMails { get; set; } = new();
+        public List<Int32> UnlockComics { get; set; } = new();
     }
 
 
@@ -1906,6 +1907,16 @@ namespace AscNet.Common.MsgPack
         public List<dynamic> UnlockDifficultyId { get; set; } = new();
         public List<dynamic> TeamRecords { get; set; } = new();
         public List<dynamic> PassChapterIds { get; set; } = new();
+        public Int32 IsOpenVision { get; set; }
+        public List<dynamic> GetAchievementRecords { get; set; } = new();
+        public Int32 TeamCountEffect { get; set; }
+        public Int32 HistoryTotalItemCount { get; set; }
+        public Int32 HistoryTotalPassFightNodeCount { get; set; }
+        public dynamic? HistoryItemObtainRecords { get; set; } = new Dictionary<int, int>();
+        public Int32 GamePassNodeCount { get; set; }
+        public dynamic? PassedEventRecord { get; set; } = new Dictionary<int, object>();
+        public Int32 AchievementCondition { get; set; }
+        public Int32 NewStage { get; set; }
     }
 
 

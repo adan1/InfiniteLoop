@@ -21,14 +21,15 @@ namespace AscNet.Common.Database
 
         static Character()
         {
-            if (File.Exists("Data/CharacterLevelUpTemplate.json"))
-                characterLevelUpTemplates = JsonConvert.DeserializeObject<List<CharacterLevelUpTemplate>>(File.ReadAllText("Data/CharacterLevelUpTemplate.json")) ?? new();
-            else
-                characterLevelUpTemplates = new();
-            if (File.Exists("Data/EquipLevelUpTemplate.json"))
-                equipLevelUpTemplates = JsonConvert.DeserializeObject<List<EquipLevelUpTemplate>>(File.ReadAllText("Data/EquipLevelUpTemplate.json")) ?? new();
-            else
-                equipLevelUpTemplates = new();
+            string characterLevelUpTemplatePath = JsonSnapshot.ResolvePath("Data/CharacterLevelUpTemplate.json");
+            characterLevelUpTemplates = File.Exists(characterLevelUpTemplatePath)
+                ? JsonConvert.DeserializeObject<List<CharacterLevelUpTemplate>>(File.ReadAllText(characterLevelUpTemplatePath)) ?? new()
+                : new();
+
+            string equipLevelUpTemplatePath = JsonSnapshot.ResolvePath("Data/EquipLevelUpTemplate.json");
+            equipLevelUpTemplates = File.Exists(equipLevelUpTemplatePath)
+                ? JsonConvert.DeserializeObject<List<EquipLevelUpTemplate>>(File.ReadAllText(equipLevelUpTemplatePath)) ?? new()
+                : new();
         }
 
         private uint NextEquipId => Equips.MaxBy(x => x.Id)?.Id + 1 ?? 1;
