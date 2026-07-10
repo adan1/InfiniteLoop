@@ -94,6 +94,7 @@ namespace AscNet.GameServer.Handlers
         private const string InitialItemDataCJson = """{"ItemDataList":[{"Id":96120,"Count":4,"BuyTimes":0,"TotalBuyTimes":0,"LastBuyTime":0,"RefreshTime":1713643079,"CreateTime":1713643079}],"ItemRecycleDict":{}}""";
         private const string PostItemRewardStepJson = """{"ChapterId":1,"Step":{"Uid":341,"StepType":3,"RootUid":0,"Overdue":0,"ItemIds":[],"IsExtraReward":0,"SelectedItemId":0,"TickIds":[1002,2001,3001,4001,5001],"TickId":0,"RefreshCharacterIds":[],"FloorIndexes":[],"RecruitCharacterIds":[],"RefreshCount":0,"RecruitCount":0,"CurRefreshCount":0,"CurRecruitCount":0,"NodeData":null,"FightRewards":[]}}""";
         private const string RecruitCompleteStepJson = """{"ChapterId":1,"Step":{"Uid":343,"StepType":5,"RootUid":0,"Overdue":0,"ItemIds":[],"IsExtraReward":0,"SelectedItemId":0,"TickIds":[],"TickId":0,"RefreshCharacterIds":[],"FloorIndexes":[],"RecruitCharacterIds":[],"RefreshCount":0,"RecruitCount":0,"CurRefreshCount":0,"CurRecruitCount":0,"NodeData":{"NodeId":1,"Slots":[{"SlotId":1,"SlotType":1,"Selected":0,"FightId":10012,"FightTemplateId":11121,"NodeRewards":[{"Uid":1,"RewardType":2,"ConfigId":2003,"Count":0,"Received":0,"TagType":0}],"PassedStageIds":[],"EventId":0,"CurStepId":0,"PassedStepId":[],"ShopId":0,"ShopItems":[]}]},"FightRewards":[]}}""";
+        private const string FightRewardStepJson = """{"ChapterId":1,"Step":{"Uid":344,"StepType":6,"RootUid":343,"Overdue":0,"ItemIds":[],"IsExtraReward":0,"SelectedItemId":0,"TickIds":[],"TickId":0,"RefreshCharacterIds":[],"FloorIndexes":[],"RecruitCharacterIds":[],"RefreshCount":0,"RecruitCount":0,"CurRefreshCount":0,"CurRecruitCount":0,"NodeData":null,"FightRewards":[{"Uid":1,"RewardType":2,"ConfigId":2003,"Count":0,"Received":0,"TagType":0},{"Uid":2,"RewardType":3,"ConfigId":16,"Count":4,"Received":0,"TagType":0}]}}""";
         private const string FightRewardItemDataJson = """{"ItemDataList":[{"Id":96119,"Count":12,"BuyTimes":0,"TotalBuyTimes":0,"LastBuyTime":0,"RefreshTime":1713643079,"CreateTime":1713643079}],"ItemRecycleDict":{}}""";
         private const string SecondFightRewardStepJson = """{"ChapterId":1,"Step":{"Uid":345,"StepType":4,"RootUid":344,"Overdue":0,"ItemIds":[],"IsExtraReward":0,"SelectedItemId":0,"TickIds":[],"TickId":2003,"RefreshCharacterIds":[],"FloorIndexes":[],"RecruitCharacterIds":[],"RefreshCount":2,"RecruitCount":1,"CurRefreshCount":0,"CurRecruitCount":0,"NodeData":null,"FightRewards":[]}}""";
         private const string EndRewardStepJson = """{"ChapterId":1,"Step":{"Uid":346,"StepType":5,"RootUid":0,"Overdue":0,"ItemIds":[],"IsExtraReward":0,"SelectedItemId":0,"TickIds":[],"TickId":0,"RefreshCharacterIds":[],"FloorIndexes":[],"RecruitCharacterIds":[],"RefreshCount":0,"RecruitCount":0,"CurRefreshCount":0,"CurRecruitCount":0,"NodeData":{"NodeId":2,"Slots":[{"SlotId":1,"SlotType":1,"Selected":0,"FightId":10011,"FightTemplateId":11111,"NodeRewards":[{"Uid":1,"RewardType":2,"ConfigId":4003,"Count":0,"Received":0,"TagType":0}],"PassedStageIds":[],"EventId":0,"CurStepId":0,"PassedStepId":[],"ShopId":0,"ShopItems":[]},{"SlotId":2,"SlotType":1,"Selected":0,"FightId":10012,"FightTemplateId":11123,"NodeRewards":[{"Uid":1,"RewardType":2,"ConfigId":2003,"Count":0,"Received":0,"TagType":0}],"PassedStageIds":[],"EventId":0,"CurStepId":0,"PassedStepId":[],"ShopId":0,"ShopItems":[]}]},"FightRewards":[]}}""";
@@ -106,6 +107,7 @@ namespace AscNet.GameServer.Handlers
         private static readonly byte[] InitialItemDataBPayload = SerializeJsonPayload(InitialItemDataBJson);
         private static readonly byte[] InitialItemDataCPayload = SerializeJsonPayload(InitialItemDataCJson);
         private static readonly byte[] PostItemRewardStepPayload = SerializeJsonPayload(PostItemRewardStepJson);
+        private static readonly byte[] FightRewardStepPayload = SerializeJsonPayload(FightRewardStepJson);
         private static readonly byte[] FightRewardItemDataPayload = SerializeJsonPayload(FightRewardItemDataJson);
         private static readonly byte[] TotalExpPayload = SerializeJsonPayload(TotalExpJson);
         private static readonly byte[] StrengthenResponsePayload = SerializeJsonPayload(StrengthenResponseJson);
@@ -122,6 +124,8 @@ namespace AscNet.GameServer.Handlers
             public List<int> TeamRobotIds { get; } = [];
             public HashSet<uint> FightStageIds { get; } = [];
             public uint? ActiveFightStageId { get; set; }
+            public int FightNodeCount { get; set; }
+            public bool PostFightRecruitPending { get; set; }
         }
 
         private static readonly ConditionalWeakTable<Session, TheatreSessionState> SessionStates = new();
@@ -232,9 +236,17 @@ namespace AscNet.GameServer.Handlers
         public static void BiancaTheatreEndRecruitRequestHandler(Session session, Packet.Request packet)
         {
             TheatreSessionState state = GetState(session);
-            Dictionary<string, object?> payload = BuildRecruitCompleteStepPayload(state);
-            RecordFightStageIds(state, payload);
-            session.SendPush("NotifyBiancaTheatreAddStep", SerializePayload(payload));
+            if (state.PostFightRecruitPending)
+            {
+                state.PostFightRecruitPending = false;
+            }
+            else
+            {
+                Dictionary<string, object?> payload = BuildRecruitCompleteStepPayload(state);
+                RecordFightStageIds(state, payload);
+                session.SendPush("NotifyBiancaTheatreAddStep", SerializePayload(payload));
+            }
+
             session.SendResponse("BiancaTheatreEndRecruitResponse", SerializePayload(new Dictionary<string, object?>
             {
                 ["BiancaTheatreItems"] = Array.Empty<object>(),
@@ -411,6 +423,28 @@ namespace AscNet.GameServer.Handlers
             state.ActiveFightStageId = null;
             return true;
         }
+        internal static bool TrySendTheatreFightClearProgress(Session session, uint stageId)
+        {
+            if (!SessionStates.TryGetValue(session, out TheatreSessionState? state) || state.ActiveFightStageId != stageId)
+                return false;
+
+            state.FightNodeCount++;
+            session.SendPush("NotifyBiancaTheatreFightNodeCountChange", SerializePayload(new Dictionary<string, object?>
+            {
+                ["FightNodeCount"] = state.FightNodeCount
+            }));
+            session.SendPush("NotifyBiancaTheatreAddStep", FightRewardStepPayload);
+            session.SendPush(new NotifyArchiveMonsterRecord
+            {
+                Monsters =
+                [
+                    new() { Id = 90110, Killed = 318 },
+                    new() { Id = 90100, Killed = 90 }
+                ]
+            });
+            state.ActiveFightStageId = null;
+            return true;
+        }
 
         internal static bool TryBuildTheatreCharacterData(Session session, uint characterId, out CharacterData characterData, out IReadOnlyList<EquipData> equips)
         {
@@ -514,6 +548,7 @@ namespace AscNet.GameServer.Handlers
         private static byte[] BuildSecondRecruitStepPayload(TheatreSessionState state)
         {
             Dictionary<string, object?> payload = MessagePackPayloads.PayloadFromJson(SecondFightRewardStepJson);
+            state.PostFightRecruitPending = true;
             Dictionary<string, object?> step = (Dictionary<string, object?>)payload["Step"]!;
             int tickId = Convert.ToInt32(step["TickId"]);
             state.RecruitTickId = tickId;

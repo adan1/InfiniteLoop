@@ -1147,8 +1147,7 @@ Sorry for the inconvenience.
             SendEmptyStartupPush(session, "NotifyKotodamaData");
             SendEmptyStartupPush(session, "NotifyMazeData");
             SendEmptyStartupPush(session, "NotifyMechanismDataDb");
-            SendEmptyStartupPush(session, "NotifyPracticeData");
-            SendEmptyStartupPush(session, "NotifyTeachingActivityInfo");
+            StudyProgressModule.SendLoginState(session);
             SendEmptyStartupPush(session, "NotifyTrialData");
             session.SendPush(notifyFunctionalEntranceData);
             SendEmptyStartupPush(session, "NotifyGachaCanLiverData");

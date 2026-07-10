@@ -200,6 +200,18 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--study-character-compat-only"))
+                {
+                    ValidateStudyCharacterCompatibility();
+                    return;
+                }
+
+                if (args.Contains("--study-progression-compat-only"))
+                {
+                    ValidateStudyProgressionCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--fight-settle-retreat-compat-only"))
                 {
                     ValidateFightSettleRetreatCompatibility();
@@ -340,6 +352,8 @@ namespace AscNet.Test
                 ValidateStoryCourseRewardCompatibility();
                 ValidatePrequelRewardCompatibility();
                 ValidateStoryDeployVersionGapCompatibility();
+                ValidateStudyCharacterCompatibility();
+                ValidateStudyProgressionCompatibility();
                 ValidateFightSettleRetreatCompatibility();
                 ValidateFightSettleAchievementCompatibility();
                 ValidatePr2QualityCompatibility();
@@ -6894,6 +6908,18 @@ namespace AscNet.Test
                 "BiancaTheatreEndRecruitResponse",
                 "BiancaTheatreEndRecruitRequest response");
             AssertEqual(0L, RequiredValue<long>(endRecruitResponse, "Code", JTokenType.Integer, "BiancaTheatreEndRecruitRequest response"), "BiancaTheatreEndRecruitResponse Code");
+            const int selectNodePacketId = 61_050;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreSelectNodeRequest),
+                harness.Session,
+                selectNodePacketId,
+                new BiancaTheatreSelectNodeRequest { NodeId = 1, SlotId = 1 });
+            JObject selectNodeResponse = ReadResponseMapPayload(
+                harness,
+                selectNodePacketId,
+                "BiancaTheatreSelectNodeResponse",
+                "Bianca Theatre NodeId 1 SlotId 1 selection response");
+            AssertEqual(0L, RequiredValue<long>(selectNodeResponse, "Code", JTokenType.Integer, "Bianca Theatre NodeId 1 SlotId 1 selection response"), "BiancaTheatreSelectNodeResponse Code");
 
             const int setSingleTeamPacketId = 61_006;
             BiancaTheatreSetSingleTeamRequest setSingleTeamRequest = new()
@@ -7019,6 +7045,174 @@ namespace AscNet.Test
             if (harness.Session.fight is not null)
                 throw new InvalidDataException("Bianca Theatre force-exit FightSettleRequest: expected session fight state to be cleared.");
             AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "Bianca Theatre force-exit settle keeps Lucia: Lotus out of the account roster");
+            const int successfulPreFightPacketId = 61_051;
+            InvokeRegisteredRequestHandler(
+                nameof(PreFightRequest),
+                harness.Session,
+                successfulPreFightPacketId,
+                preFightRoundTrip);
+            PreFightResponse successfulPreFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness,
+                successfulPreFightPacketId,
+                nameof(PreFightResponse),
+                "Bianca Theatre successful first fight PreFightRequest response");
+            AssertEqual(0, successfulPreFightResponse.Code, "Bianca Theatre successful first fight PreFightResponse Code");
+            if (successfulPreFightResponse.FightData is null)
+                throw new InvalidDataException("Bianca Theatre successful first fight PreFightResponse: expected FightData.");
+            AssertEqual(theatreFightStageId, successfulPreFightResponse.FightData.StageId, "Bianca Theatre successful first fight PreFightResponse FightData.StageId");
+            AssertBiancaTheatreRobotNpcSlot(
+                successfulPreFightResponse,
+                playerId,
+                expectedSlot: 0,
+                expectedCharacterId: lotusCharacterId,
+                expectedRobotId: theatreRobotId,
+                "Bianca Theatre successful first fight PreFightResponse player NpcData[0]");
+
+            const int successfulFightSettlePacketId = 61_052;
+            FightSettleRequest successfulFightSettleRequest = CreateMissingStageSettleRequest(
+                theatreFightStageId,
+                successfulPreFightResponse.FightData.FightId,
+                playerId);
+            successfulFightSettleRequest.Result.IsWin = true;
+            successfulFightSettleRequest.Result.IsForceExit = false;
+            InvokeRegisteredRequestHandler(
+                nameof(FightSettleRequest),
+                harness.Session,
+                successfulFightSettlePacketId,
+                successfulFightSettleRequest);
+            (JObject successfulStagePush, JObject fightNodeCountPush, JObject fightRewardStepPush, JObject archiveMonsterRecordPush, FightSettleResponse successfulFightSettleResponse) =
+                ReadBiancaTheatreSuccessfulSettleResult(
+                    harness,
+                    successfulFightSettlePacketId,
+                    "Bianca Theatre successful first FightSettleRequest");
+            AssertPopulatedDynamicPayload(successfulStagePush, "Bianca Theatre successful first FightSettleRequest NotifyStageData");
+            AssertEqual(1L, RequiredValue<long>(fightNodeCountPush, "FightNodeCount", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest NotifyBiancaTheatreFightNodeCountChange"), "Bianca Theatre successful first FightSettleRequest FightNodeCount");
+            JObject fightRewardStep = RequiredObject(fightRewardStepPush, "Step", "Bianca Theatre successful first FightSettleRequest NotifyBiancaTheatreAddStep");
+            AssertEqual(1L, RequiredValue<long>(fightRewardStepPush, "ChapterId", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest NotifyBiancaTheatreAddStep"), "Bianca Theatre successful first FightSettleRequest reward step ChapterId");
+            AssertEqual(344L, RequiredValue<long>(fightRewardStep, "Uid", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest reward step"), "Bianca Theatre successful first FightSettleRequest reward step Uid");
+            AssertEqual(6L, RequiredValue<long>(fightRewardStep, "StepType", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest reward step"), "Bianca Theatre successful first FightSettleRequest reward step StepType");
+            AssertEqual(343L, RequiredValue<long>(fightRewardStep, "RootUid", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest reward step"), "Bianca Theatre successful first FightSettleRequest reward step RootUid");
+            JArray fightRewards = (JArray)RequiredToken(fightRewardStep, "FightRewards", JTokenType.Array, "Bianca Theatre successful first FightSettleRequest reward step");
+            JObject characterFightReward = fightRewards
+                .OfType<JObject>()
+                .Single(reward => RequiredValue<long>(reward, "Uid", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest FightRewards") == 1);
+            AssertEqual(2L, RequiredValue<long>(characterFightReward, "RewardType", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest FightRewards Uid 1"), "Bianca Theatre successful first FightSettleRequest FightRewards Uid 1 RewardType");
+            AssertEqual(2003L, RequiredValue<long>(characterFightReward, "ConfigId", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest FightRewards Uid 1"), "Bianca Theatre successful first FightSettleRequest FightRewards Uid 1 ConfigId");
+            JObject itemFightReward = fightRewards
+                .OfType<JObject>()
+                .Single(reward => RequiredValue<long>(reward, "Uid", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest FightRewards") == 2);
+            AssertEqual(3L, RequiredValue<long>(itemFightReward, "RewardType", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest FightRewards Uid 2"), "Bianca Theatre successful first FightSettleRequest FightRewards Uid 2 RewardType");
+            AssertEqual(16L, RequiredValue<long>(itemFightReward, "ConfigId", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest FightRewards Uid 2"), "Bianca Theatre successful first FightSettleRequest FightRewards Uid 2 ConfigId");
+            AssertEqual(4L, RequiredValue<long>(itemFightReward, "Count", JTokenType.Integer, "Bianca Theatre successful first FightSettleRequest FightRewards Uid 2"), "Bianca Theatre successful first FightSettleRequest FightRewards Uid 2 Count");
+            AssertPopulatedDynamicPayload(archiveMonsterRecordPush, "Bianca Theatre successful first FightSettleRequest NotifyArchiveMonsterRecord");
+            AssertEqual(0, successfulFightSettleResponse.Code, "Bianca Theatre successful first FightSettleResponse Code");
+            if (successfulFightSettleResponse.Settle is null)
+                throw new InvalidDataException("Bianca Theatre successful first FightSettleResponse: expected Settle payload.");
+            AssertEqual(true, successfulFightSettleResponse.Settle.IsWin, "Bianca Theatre successful first FightSettleResponse Settle.IsWin");
+            AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "Bianca Theatre successful first settle keeps Lucia: Lotus out of the account roster");
+
+            const int receiveItemFightRewardPacketId = 61_053;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreRecvFightRewardRequest),
+                harness.Session,
+                receiveItemFightRewardPacketId,
+                new BiancaTheatreRecvFightRewardRequest { Uid = 2 });
+            NotifyItemDataList itemFightRewardPush = ReadPushPayload<NotifyItemDataList>(
+                harness,
+                nameof(NotifyItemDataList),
+                "Bianca Theatre Uid 2 fight reward item push");
+            AssertEqual(12L, itemFightRewardPush.ItemDataList.Single(item => item.Id == 96119).Count, "Bianca Theatre Uid 2 fight reward item 96119 count");
+            JObject receiveItemFightRewardResponse = ReadResponseMapPayload(
+                harness,
+                receiveItemFightRewardPacketId,
+                "BiancaTheatreRecvFightRewardResponse",
+                "Bianca Theatre Uid 2 fight reward response");
+            AssertEqual(0L, RequiredValue<long>(receiveItemFightRewardResponse, "Code", JTokenType.Integer, "Bianca Theatre Uid 2 fight reward response"), "Bianca Theatre Uid 2 fight reward Code");
+
+            const int receiveCharacterFightRewardPacketId = 61_054;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreRecvFightRewardRequest),
+                harness.Session,
+                receiveCharacterFightRewardPacketId,
+                new BiancaTheatreRecvFightRewardRequest { Uid = 1 });
+            JObject postFightRecruitStepPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "Bianca Theatre Uid 1 fight reward post-fight recruit step push");
+            JObject postFightRecruitStep = RequiredObject(postFightRecruitStepPush, "Step", "Bianca Theatre Uid 1 fight reward post-fight recruit step push");
+            AssertEqual(345L, RequiredValue<long>(postFightRecruitStep, "Uid", JTokenType.Integer, "Bianca Theatre Uid 1 fight reward post-fight recruit step"), "Bianca Theatre Uid 1 fight reward post-fight recruit step Uid");
+            AssertEqual(4L, RequiredValue<long>(postFightRecruitStep, "StepType", JTokenType.Integer, "Bianca Theatre Uid 1 fight reward post-fight recruit step"), "Bianca Theatre Uid 1 fight reward post-fight recruit step StepType");
+            AssertEqual(344L, RequiredValue<long>(postFightRecruitStep, "RootUid", JTokenType.Integer, "Bianca Theatre Uid 1 fight reward post-fight recruit step"), "Bianca Theatre Uid 1 fight reward post-fight recruit step RootUid");
+            JObject receiveCharacterFightRewardResponse = ReadResponseMapPayload(
+                harness,
+                receiveCharacterFightRewardPacketId,
+                "BiancaTheatreRecvFightRewardResponse",
+                "Bianca Theatre Uid 1 fight reward response");
+            AssertEqual(0L, RequiredValue<long>(receiveCharacterFightRewardResponse, "Code", JTokenType.Integer, "Bianca Theatre Uid 1 fight reward response"), "Bianca Theatre Uid 1 fight reward Code");
+
+            const int postFightRecruitCharacterPacketId = 61_055;
+            InvokeRegisteredRequestHandler(
+                nameof(BiancaTheatreRecruitCharacterRequest),
+                harness.Session,
+                postFightRecruitCharacterPacketId,
+                new BiancaTheatreRecruitCharacterRequest { CharacterId = 1_211_002 });
+            JObject postFightRecruitCharacterResponse = ReadResponseMapPayload(
+                harness,
+                postFightRecruitCharacterPacketId,
+                "BiancaTheatreRecruitCharacterResponse",
+                "Bianca Theatre post-fight recruit response");
+            AssertEqual(0L, RequiredValue<long>(postFightRecruitCharacterResponse, "Code", JTokenType.Integer, "Bianca Theatre post-fight recruit response"), "Bianca Theatre post-fight recruit Code");
+            AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "Bianca Theatre post-fight recruit keeps mode-local character out of the account roster");
+
+            const int postFightEndRecruitPacketId = 61_056;
+            InvokeRegisteredRequestHandler(
+                "BiancaTheatreEndRecruitRequest",
+                harness.Session,
+                postFightEndRecruitPacketId,
+                null);
+            JObject postFightEndRecruitResponse = ReadResponseMapPayload(
+                harness,
+                postFightEndRecruitPacketId,
+                "BiancaTheatreEndRecruitResponse",
+                "Bianca Theatre post-fight EndRecruit must not emit stale Uid 343 NodeId 1 step");
+            AssertEqual(0L, RequiredValue<long>(postFightEndRecruitResponse, "Code", JTokenType.Integer, "Bianca Theatre post-fight EndRecruit response"), "Bianca Theatre post-fight EndRecruit Code");
+            if (harness.TryReadAvailablePacket("Bianca Theatre post-fight EndRecruit unexpected packet", out Packet postFightEndRecruitUnexpectedPacket))
+                throw new InvalidDataException($"Bianca Theatre post-fight EndRecruit: expected response-only, got unexpected {postFightEndRecruitUnexpectedPacket.Type} packet.");
+
+            const int endReceiveFightRewardPacketId = 61_057;
+            InvokeRegisteredRequestHandler(
+                "BiancaTheatreEndRecvFightRewardRequest",
+                harness.Session,
+                endReceiveFightRewardPacketId,
+                null);
+            JObject endReceiveFightRewardStepPush = ReadPushMapPayload(
+                harness,
+                "NotifyBiancaTheatreAddStep",
+                "Bianca Theatre EndRecv fight reward NodeId 2 step push");
+            JObject endReceiveFightRewardStep = RequiredObject(endReceiveFightRewardStepPush, "Step", "Bianca Theatre EndRecv fight reward NodeId 2 step push");
+            AssertEqual(346L, RequiredValue<long>(endReceiveFightRewardStep, "Uid", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 step"), "Bianca Theatre EndRecv fight reward step Uid");
+            AssertEqual(5L, RequiredValue<long>(endReceiveFightRewardStep, "StepType", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 step"), "Bianca Theatre EndRecv fight reward step StepType");
+            JObject endReceiveFightRewardNodeData = RequiredObject(endReceiveFightRewardStep, "NodeData", "Bianca Theatre EndRecv fight reward NodeId 2 step");
+            AssertEqual(2L, RequiredValue<long>(endReceiveFightRewardNodeData, "NodeId", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 step NodeData"), "Bianca Theatre EndRecv fight reward NodeId");
+            JArray endReceiveFightRewardSlots = (JArray)RequiredToken(endReceiveFightRewardNodeData, "Slots", JTokenType.Array, "Bianca Theatre EndRecv fight reward NodeId 2 step NodeData");
+            AssertEqual(2, endReceiveFightRewardSlots.Count, "Bianca Theatre EndRecv fight reward NodeId 2 slot count");
+            JObject endReceiveFightRewardSlot1 = endReceiveFightRewardSlots
+                .OfType<JObject>()
+                .Single(slot => RequiredValue<long>(slot, "SlotId", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 slots") == 1);
+            AssertEqual(10011L, RequiredValue<long>(endReceiveFightRewardSlot1, "FightId", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 1"), "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 1 FightId");
+            AssertEqual(11111L, RequiredValue<long>(endReceiveFightRewardSlot1, "FightTemplateId", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 1"), "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 1 FightTemplateId");
+            JObject endReceiveFightRewardSlot2 = endReceiveFightRewardSlots
+                .OfType<JObject>()
+                .Single(slot => RequiredValue<long>(slot, "SlotId", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 slots") == 2);
+            AssertEqual(10012L, RequiredValue<long>(endReceiveFightRewardSlot2, "FightId", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 2"), "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 2 FightId");
+            AssertEqual(11123L, RequiredValue<long>(endReceiveFightRewardSlot2, "FightTemplateId", JTokenType.Integer, "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 2"), "Bianca Theatre EndRecv fight reward NodeId 2 SlotId 2 FightTemplateId");
+            JObject endReceiveFightRewardResponse = ReadResponseMapPayload(
+                harness,
+                endReceiveFightRewardPacketId,
+                "BiancaTheatreEndRecvFightRewardResponse",
+                "Bianca Theatre EndRecv fight reward response");
+            AssertEqual(0L, RequiredValue<long>(endReceiveFightRewardResponse, "Code", JTokenType.Integer, "Bianca Theatre EndRecv fight reward response"), "Bianca Theatre EndRecv fight reward Code");
+            AssertAccountRosterUnchanged(harness, initialAccountRosterIds, "Bianca Theatre EndRecv fight reward keeps mode-local characters out of the account roster");
 
             const int settlePacketId = 61_009;
             InvokeRegisteredRequestHandler("BiancaTheatreSettleAdventureRequest", harness.Session, settlePacketId, null);
@@ -7142,6 +7336,40 @@ namespace AscNet.Test
                 }
                 if (value is string text && text.Length == 0)
                     throw new InvalidDataException($"{name}: expected non-empty text.");
+            }
+
+            static (JObject StagePush, JObject FightNodeCountPush, JObject FightRewardStepPush, JObject ArchiveMonsterRecordPush, FightSettleResponse Response) ReadBiancaTheatreSuccessfulSettleResult(
+                LoopbackSessionHarness harness,
+                int expectedPacketId,
+                string name)
+            {
+                JObject stagePush = ReadPushMapPayload(
+                    harness,
+                    nameof(NotifyStageData),
+                    $"{name} NotifyStageData push");
+                JObject fightNodeCountPush = ReadPushMapPayload(
+                    harness,
+                    "NotifyBiancaTheatreFightNodeCountChange",
+                    $"{name} NotifyBiancaTheatreFightNodeCountChange push");
+                JObject fightRewardStepPush = ReadPushMapPayload(
+                    harness,
+                    "NotifyBiancaTheatreAddStep",
+                    $"{name} NotifyBiancaTheatreAddStep push");
+                JObject archiveMonsterRecordPush = ReadPushMapPayload(
+                    harness,
+                    "NotifyArchiveMonsterRecord",
+                    $"{name} NotifyArchiveMonsterRecord push");
+                Packet responsePacket = harness.ReadPacket($"{name} response");
+                AssertEqual(Packet.ContentType.Response, responsePacket.Type, $"{name} response packet type");
+                Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(responsePacket.Content);
+                AssertEqual(expectedPacketId, response.Id, $"{name} response packet id");
+                AssertEqual(nameof(FightSettleResponse), response.Name, $"{name} response packet name");
+                return (
+                    stagePush,
+                    fightNodeCountPush,
+                    fightRewardStepPush,
+                    archiveMonsterRecordPush,
+                    MessagePackSerializer.Deserialize<FightSettleResponse>(response.Content));
             }
 
             static (JObject AdventureSettlePush, FightSettleResponse Response) ReadBiancaTheatreForceExitSettleResult(
@@ -10242,6 +10470,19 @@ namespace AscNet.Test
                     (RequiredCollectionField(typeof(AscNet.Common.Database.Player)), recordingPlayerCollection)
                 ]);
             }
+            public static MongoCollectionOverride InstallForStudyProgressionCompatibility(
+                out RecordingMongoCollectionProxy<AscNet.Common.Database.Stage> stageCollection)
+            {
+                IMongoCollection<AscNet.Common.Database.Stage> recordingStageCollection = CreateRecordingMongoCollection(out stageCollection);
+                return new MongoCollectionOverride(
+                [
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Inventory)), CreateNoOpMongoCollection<AscNet.Common.Database.Inventory>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Character)), CreateNoOpMongoCollection<AscNet.Common.Database.Character>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Player)), CreateNoOpMongoCollection<AscNet.Common.Database.Player>()),
+                    (RequiredCollectionField(typeof(AscNet.Common.Database.Stage)), recordingStageCollection)
+                ]);
+            }
+
 
             public static MongoCollectionOverride InstallForStoryDeployVersionGapCompatibility()
             {
@@ -13748,6 +13989,686 @@ namespace AscNet.Test
             if (retreatStage.Stages.TryGetValue(retailStageId, out StageDatum? clearedStage))
                 throw new InvalidDataException($"FightSettleRequest retail retreat: stage {retailStageId} must not be persisted as cleared, got Passed={clearedStage.Passed}, StarsMark={clearedStage.StarsMark}.");
             AssertEmptyList(retreatInventory.Items, "FightSettleRequest retail retreat inventory after failed settle");
+        }
+
+        private static void ValidateStudyCharacterCompatibility()
+        {
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForStoryDeployVersionGapCompatibility();
+            const int luciaLotusCharacterId = 1_021_001;
+
+            JObject compatibility = JsonSnapshot.LoadObject("Configs/study_compatibility_4.5.0.json");
+            static JArray CompatibilityRows(JObject root, string name) =>
+                (JArray)RequiredToken(root, name, JTokenType.Array, "Study compatibility");
+            AssertEqual("4.5.0", compatibility.Value<string>("ClientVersion"), "Study compatibility client version");
+            AssertEqual(88, CompatibilityRows(compatibility, "PracticeGroups").Count, "Study compatibility PracticeGroup row count");
+            AssertEqual(250, CompatibilityRows(compatibility, "PracticeActivities").Count, "Study compatibility PracticeActivity row count");
+            AssertEqual(48, CompatibilityRows(compatibility, "TeachingActivities").Count, "Study compatibility TeachingActivity row count");
+            AssertEqual(139, CompatibilityRows(compatibility, "TeachingRobots").Count, "Study compatibility TeachingRobot row count");
+            AssertEqual(461, CompatibilityRows(compatibility, "Stages").Count, "Study compatibility Stage row count");
+            AssertEqual(141, CompatibilityRows(compatibility, "StageLevelControls").Count, "Study compatibility StageLevelControl row count");
+            AssertEqual(167, CompatibilityRows(compatibility, "Robots").Count, "Study compatibility Robot row count");
+
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_000,
+                cardIds: [],
+                robotIds: [],
+                expectedCharacterId: 1_261_003,
+                expectedRobotId: 127_618,
+                luciaLotusCharacterId,
+                "Study current-client Stage.RobotId stage 30100000",
+                expectedRebootId: 3,
+                expectedMonsterLevels: [229, 229, 229]);
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_001,
+                cardIds: [],
+                robotIds: [],
+                expectedCharacterId: 1_271_003,
+                expectedRobotId: 2_249,
+                luciaLotusCharacterId,
+                "Study current-client Practice stage 30100001");
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_001,
+                cardIds: [],
+                robotIds: [4_000, 0, 0],
+                expectedCharacterId: 1_271_003,
+                expectedRobotId: 2_249,
+                luciaLotusCharacterId,
+                "Study invalid requested robot falls back to configured stage robot");
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_028,
+                cardIds: [],
+                robotIds: [],
+                expectedCharacterId: 1_291_002,
+                expectedRobotId: 2_260,
+                luciaLotusCharacterId,
+                "Study current-client TeachingRobot stage 30100028");
+            AssertStudyStageRobotDeployments(
+                stageId: 30_100_055,
+                cardIds: [],
+                robotIds: [],
+                expectedDeployments: [(1_171_004, 2_263), (1_291_002, 2_261)],
+                luciaLotusCharacterId,
+                "Study current-client ordered multi-robot stage 30100055");
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_142,
+                cardIds: [],
+                robotIds: [],
+                expectedCharacterId: 1_351_003,
+                expectedRobotId: 2_297,
+                luciaLotusCharacterId,
+                "Study Vergil normal stage 30100142 empty deployment");
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_148,
+                cardIds: [],
+                robotIds: [2_298, 0, 0],
+                expectedCharacterId: 1_351_003,
+                expectedRobotId: 2_298,
+                luciaLotusCharacterId,
+                "Study Vergil challenge stage 30100148 explicit robot deployment");
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_145,
+                cardIds: [],
+                robotIds: [],
+                expectedCharacterId: 1_361_003,
+                expectedRobotId: 2_300,
+                luciaLotusCharacterId,
+                "Study Dante normal stage 30100145 empty deployment");
+            AssertStudyStageRobotDeployment(
+                stageId: 30_100_801,
+                cardIds: [],
+                robotIds: [],
+                expectedCharacterId: luciaLotusCharacterId,
+                expectedRobotId: 4_000,
+                luciaLotusCharacterId,
+                "Study existing stage 30100801 current-client override control");
+        }
+
+        private static void AssertStudyStageRobotDeployment(
+            uint stageId,
+            IReadOnlyList<uint> cardIds,
+            IReadOnlyList<int> robotIds,
+            int expectedCharacterId,
+            int expectedRobotId,
+            int luciaLotusCharacterId,
+            string name,
+            int? expectedRebootId = null,
+            IReadOnlyList<int>? expectedMonsterLevels = null)
+        {
+            AssertStudyStageRobotDeployments(
+                stageId,
+                cardIds,
+                robotIds,
+                [(expectedCharacterId, expectedRobotId)],
+                luciaLotusCharacterId,
+                name,
+                expectedRebootId,
+                expectedMonsterLevels);
+        }
+
+        private static void AssertStudyStageRobotDeployments(
+            uint stageId,
+            IReadOnlyList<uint> cardIds,
+            IReadOnlyList<int> robotIds,
+            IReadOnlyList<(int CharacterId, int RobotId)> expectedDeployments,
+            int luciaLotusCharacterId,
+            string name,
+            int? expectedRebootId = null,
+            IReadOnlyList<int>? expectedMonsterLevels = null)
+        {
+            const long playerId = 88_031;
+            AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
+            character.Characters.Add(CreateLoginAccountCompatibilityCharacter((uint)luciaLotusCharacterId, fashionId: 3_021_001));
+            long[] initialAccountRosterIds = character.Characters.Select(accountCharacter => (long)accountCharacter.Id).Order().ToArray();
+            using LoopbackSessionHarness harness = new(
+                character,
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                $"study-character-{stageId}-compat-test");
+            harness.Session.stage = CreateLoginAccountCompatibilityStage(playerId);
+
+            PreFightRequest preFightRequest = new()
+            {
+                PreFightData = new()
+                {
+                    ChallengeCount = 1,
+                    StageId = stageId,
+                    CardIds = cardIds.ToList(),
+                    RobotIds = robotIds.ToList(),
+                    FirstFightPos = 1,
+                    CaptainPos = 1,
+                    IsHasAssist = false
+                }
+            };
+            const int preFightPacketId = 30_101;
+            InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, preFightPacketId, preFightRequest);
+            PreFightResponse preFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness,
+                preFightPacketId,
+                nameof(PreFightResponse),
+                $"{name} PreFightResponse");
+            AssertEqual(0, preFightResponse.Code, $"{name} PreFightResponse Code");
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"{name}: expected FightData.");
+            PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData playerRole = preFightResponse.FightData.RoleData.Single(role => role.Id == (uint)playerId);
+            AssertEqual(expectedDeployments.Count, playerRole.NpcData.Count, $"{name} deployed robot count");
+            for (int slot = 0; slot < expectedDeployments.Count; slot++)
+            {
+                (int expectedCharacterId, int expectedRobotId) = expectedDeployments[slot];
+                AssertStudyRobotNpcSlot(
+                    preFightResponse,
+                    playerId,
+                    slot,
+                    expectedCharacterId,
+                    expectedRobotId,
+                    $"{name} NpcData[{slot}]");
+            }
+            if (expectedRebootId.HasValue)
+                AssertEqual(expectedRebootId.Value, preFightResponse.FightData.RebootId, $"{name} RebootId");
+            if (expectedMonsterLevels is not null)
+            {
+                AssertIntegerList(
+                    expectedMonsterLevels.Select(level => (long)level).ToArray(),
+                    preFightResponse.FightData.MonsterLevel.Select(level => (long)level).ToArray(),
+                    $"{name} MonsterLevel");
+            }
+            AssertPreFightDoesNotDeployCharacter(
+                preFightResponse,
+                playerId,
+                forbiddenCharacterId: expectedDeployments.Any(deployment => deployment.CharacterId == luciaLotusCharacterId) ? 0 : luciaLotusCharacterId,
+                $"{name} does not substitute Lucia: Lotus");
+            AssertIntegerList(
+                initialAccountRosterIds,
+                harness.Session.character.Characters.Select(accountCharacter => (long)accountCharacter.Id).Order().ToArray(),
+                $"{name} does not mutate account roster");
+        }
+
+        private static void AssertStudyRobotNpcSlot(
+            PreFightResponse preFightResponse,
+            long playerId,
+            int expectedSlot,
+            int expectedCharacterId,
+            int expectedRobotId,
+            string name)
+        {
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"{name}: expected FightData.");
+            PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData playerRole = preFightResponse.FightData.RoleData.SingleOrDefault(role => role.Id == (uint)playerId)
+                ?? throw new InvalidDataException($"{name}: expected player RoleData.");
+            if (!playerRole.NpcData.TryGetValue(expectedSlot, out dynamic? npcValue))
+                throw new InvalidDataException($"{name}: expected NpcData slot {expectedSlot}.");
+            System.Collections.IDictionary npcData = RequiredDynamicMap((object?)npcValue, name);
+            System.Collections.IDictionary character = RequiredDynamicMap(
+                RequiredDynamicValue(npcData, "Character", name),
+                $"{name}.Character");
+            AssertEqual(expectedCharacterId, RequiredDynamicInteger(character, "Id", $"{name}.Character"), $"{name}.Character.Id");
+            AssertEqual(true, RequiredDynamicBoolean(npcData, "IsRobot", name), $"{name}.IsRobot");
+            AssertEqual(expectedRobotId, RequiredDynamicInteger(npcData, "RobotId", name), $"{name}.RobotId");
+        }
+
+        private static void AssertPreFightDoesNotDeployCharacter(
+            PreFightResponse preFightResponse,
+            long playerId,
+            int forbiddenCharacterId,
+            string name)
+        {
+            if (forbiddenCharacterId == 0)
+                return;
+            if (preFightResponse.FightData is null)
+                throw new InvalidDataException($"{name}: expected FightData.");
+            PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData playerRole = preFightResponse.FightData.RoleData.SingleOrDefault(role => role.Id == (uint)playerId)
+                ?? throw new InvalidDataException($"{name}: expected player RoleData.");
+            long[] deployedCharacterIds = playerRole.NpcData
+                .OrderBy(npc => npc.Key)
+                .Select(npc => (long)RequiredNpcCharacterId(npc, name))
+                .ToArray();
+            if (deployedCharacterIds.Contains(forbiddenCharacterId))
+                throw new InvalidDataException($"{name}: forbidden character {forbiddenCharacterId} was deployed.");
+        }
+
+        private static void ValidateStudyProgressionCompatibility()
+        {
+            using MongoCollectionOverride mongoOverride = MongoCollectionOverride.InstallForStudyProgressionCompatibility(out RecordingMongoCollectionProxy<AscNet.Common.Database.Stage> stageCollection);
+            const long playerId = 88_032;
+            const int teachingStageId = 30_100_142;
+            const int teachingNextStageId = 30_100_143;
+            const int teachingActivityId = 37;
+            const int practiceStageId = 30_100_001;
+            const int practiceNextStageId = 30_100_002;
+            const int practiceChapterId = 4;
+            const int linkedPracticeStageId = 30_100_007;
+            const int linkedPracticeChapterId = 7;
+            const int linkedTeachingStageId = 30_100_010;
+            const int linkedTeachingActivityId = 22;
+
+            Type accountModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule");
+            MethodInfo doLogin = RequiredMethod(
+                accountModule,
+                "DoLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session)]);
+
+            using (LoopbackSessionHarness teachingHarness = CreateStudyProgressHarness(playerId, "study-progression-teaching"))
+            {
+                int teachingStageSaveCount = stageCollection.ReplaceOneCalls + 1;
+                (NotifyStageData teachingStagePush, JObject? teachingUpdate, FightSettleResponse teachingSettleResponse) =
+                    CompleteStudyFight(
+                        teachingHarness,
+                        teachingStageId,
+                        playerId,
+                        preFightPacketId: 30_200,
+                        fightSettlePacketId: 30_201,
+                        expectTeachingUpdate: true,
+                        "Teaching Study stage clear");
+                AssertAcceptedMissingStageSettle(teachingSettleResponse, teachingStageId, "Teaching Study stage clear FightSettleResponse");
+                AssertPassedStudyStage(teachingStagePush, teachingHarness, teachingStageId, teachingNextStageId, "Teaching Study stage clear");
+                JObject teachingUpdateInfo = RequiredObject(
+                    teachingUpdate ?? throw new InvalidDataException("Teaching Study stage clear: missing NotifyTeachingUpdateStageInfo."),
+                    "Info",
+                    "Teaching Study stage clear NotifyTeachingUpdateStageInfo");
+                AssertEqual((long)teachingStageId, RequiredValue<long>(teachingUpdateInfo, "Id", JTokenType.Integer, "Teaching Study stage clear NotifyTeachingUpdateStageInfo.Info"), "Teaching Study stage clear NotifyTeachingUpdateStageInfo.Info.Id");
+                AssertEqual(7L, RequiredValue<long>(teachingUpdateInfo, "StarsMark", JTokenType.Integer, "Teaching Study stage clear NotifyTeachingUpdateStageInfo.Info"), "Teaching Study stage clear NotifyTeachingUpdateStageInfo.Info.StarsMark");
+
+                using LoopbackSessionHarness teachingResumeHarness = CreateStudyProgressHarness(playerId, "study-progression-teaching-resume");
+                teachingResumeHarness.Session.stage = RehydratePersistedStudyStage(
+                    stageCollection,
+                    expectedSaveCount: teachingStageSaveCount,
+                    teachingStageId,
+                    "Teaching Study stage clear persistence");
+                Dictionary<string, Packet.Push> teachingLoginPushes = InvokeLoginAndReadStartupPushes(
+                    teachingResumeHarness,
+                    doLogin,
+                    "Teaching Study stage clear resumed AccountModule.DoLogin");
+                AssertTeachingLoginStage(
+                    teachingLoginPushes,
+                    teachingActivityId,
+                    teachingStageId,
+                    "Teaching Study stage clear resumed AccountModule.DoLogin");
+                AssertNoPracticeLoginStage(
+                    teachingLoginPushes,
+                    teachingStageId,
+                    "Teaching Study stage clear resumed AccountModule.DoLogin");
+            }
+
+            using (LoopbackSessionHarness practiceHarness = CreateStudyProgressHarness(playerId + 1, "study-progression-practice"))
+            {
+                int practiceStageSaveCount = stageCollection.ReplaceOneCalls + 1;
+                (NotifyStageData practiceStagePush, JObject? practiceUpdate, FightSettleResponse practiceSettleResponse) =
+                    CompleteStudyFight(
+                        practiceHarness,
+                        practiceStageId,
+                        playerId + 1,
+                        preFightPacketId: 30_202,
+                        fightSettlePacketId: 30_203,
+                        expectTeachingUpdate: false,
+                        "Practice Study stage clear");
+                AssertAcceptedMissingStageSettle(practiceSettleResponse, practiceStageId, "Practice Study stage clear FightSettleResponse");
+                AssertPassedStudyStage(practiceStagePush, practiceHarness, practiceStageId, practiceNextStageId, "Practice Study stage clear");
+                if (practiceUpdate is not null)
+                    throw new InvalidDataException("Practice Study stage clear: must not send NotifyTeachingUpdateStageInfo.");
+
+                using LoopbackSessionHarness practiceResumeHarness = CreateStudyProgressHarness(playerId + 1, "study-progression-practice-resume");
+                practiceResumeHarness.Session.stage = RehydratePersistedStudyStage(
+                    stageCollection,
+                    expectedSaveCount: practiceStageSaveCount,
+                    practiceStageId,
+                    "Practice Study stage clear persistence");
+                Dictionary<string, Packet.Push> practiceLoginPushes = InvokeLoginAndReadStartupPushes(
+                    practiceResumeHarness,
+                    doLogin,
+                    "Practice Study stage clear resumed AccountModule.DoLogin");
+                AssertPracticeLoginStage(
+                    practiceLoginPushes,
+                    practiceChapterId,
+                    practiceStageId,
+                    "Practice Study stage clear resumed AccountModule.DoLogin");
+                AssertNoTeachingLoginStage(
+                    practiceLoginPushes,
+                    practiceStageId,
+                    "Practice Study stage clear resumed AccountModule.DoLogin");
+            }
+
+            using (LoopbackSessionHarness linkedHarness = CreateStudyProgressHarness(playerId + 2, "study-progression-linked-ownership"))
+            {
+                linkedHarness.Session.stage.AddStage(new StageDatum
+                {
+                    StageId = linkedPracticeStageId,
+                    Passed = true,
+                    StarsMark = 7
+                });
+                linkedHarness.Session.stage.AddStage(new StageDatum
+                {
+                    StageId = linkedTeachingStageId,
+                    Passed = true,
+                    StarsMark = 7
+                });
+
+                Dictionary<string, Packet.Push> linkedLoginPushes = InvokeLoginAndReadStartupPushes(
+                    linkedHarness,
+                    doLogin,
+                    "Linked Study ownership AccountModule.DoLogin");
+                AssertPracticeLoginStage(
+                    linkedLoginPushes,
+                    linkedPracticeChapterId,
+                    linkedPracticeStageId,
+                    "Linked Practice Study stage AccountModule.DoLogin");
+                AssertNoTeachingLoginStage(
+                    linkedLoginPushes,
+                    linkedPracticeStageId,
+                    "Linked Practice Study stage AccountModule.DoLogin");
+                AssertTeachingLoginStage(
+                    linkedLoginPushes,
+                    linkedTeachingActivityId,
+                    linkedTeachingStageId,
+                    "Linked Teaching Study stage AccountModule.DoLogin");
+                AssertNoPracticeLoginStage(
+                    linkedLoginPushes,
+                    linkedTeachingStageId,
+                    "Linked Teaching Study stage AccountModule.DoLogin");
+            }
+
+            using (LoopbackSessionHarness failedHarness = CreateStudyProgressHarness(playerId + 3, "study-progression-failed"))
+            {
+                PreFightResponse failedPreFightResponse = StartStudyFight(
+                    failedHarness,
+                    teachingStageId,
+                    playerId + 3,
+                    preFightPacketId: 30_204,
+                    "Failed Teaching Study stage");
+                if (failedPreFightResponse.FightData is null)
+                    throw new InvalidDataException("Failed Teaching Study stage: expected PreFight FightData.");
+
+                FightSettleRequest failedSettleRequest = CreateMissingStageSettleRequest(
+                    teachingStageId,
+                    failedPreFightResponse.FightData.FightId,
+                    playerId + 3);
+                failedSettleRequest.Result.IsWin = false;
+                failedSettleRequest.Result.IsForceExit = true;
+                InvokeRegisteredRequestHandler(
+                    nameof(FightSettleRequest),
+                    failedHarness.Session,
+                    packetId: 30_205,
+                    failedSettleRequest);
+                _ = ReadResponsePayload<FightSettleResponse>(
+                    failedHarness,
+                    expectedPacketId: 30_205,
+                    expectedResponseName: nameof(FightSettleResponse),
+                    "Failed Teaching Study stage FightSettleResponse");
+                if (failedHarness.Session.stage.Stages.ContainsKey(teachingStageId))
+                    throw new InvalidDataException($"Failed Teaching Study stage: stage {teachingStageId} must not be persisted.");
+
+                Dictionary<string, Packet.Push> failedLoginPushes = InvokeLoginAndReadStartupPushes(
+                    failedHarness,
+                    doLogin,
+                    "Failed Teaching Study stage AccountModule.DoLogin");
+                AssertNoTeachingLoginStage(
+                    failedLoginPushes,
+                    teachingStageId,
+                    "Failed Teaching Study stage AccountModule.DoLogin");
+                AssertNoPracticeLoginStage(
+                    failedLoginPushes,
+                    teachingStageId,
+                    "Failed Teaching Study stage AccountModule.DoLogin");
+            }
+
+            static LoopbackSessionHarness CreateStudyProgressHarness(long testPlayerId, string name)
+            {
+                AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(testPlayerId);
+                character.Characters.Add(CreateLoginAccountCompatibilityCharacter(1_021_001, fashionId: 3_021_001));
+                LoopbackSessionHarness harness = new(
+                    character,
+                    CreateDrawCompatibilityPlayer(testPlayerId),
+                    CreateDrawCompatibilityInventory(testPlayerId, []),
+                    name);
+                harness.Session.stage = CreateLoginAccountCompatibilityStage(testPlayerId);
+                return harness;
+            }
+
+            static PreFightResponse StartStudyFight(
+                LoopbackSessionHarness harness,
+                uint stageId,
+                long testPlayerId,
+                int preFightPacketId,
+                string name)
+            {
+                InvokeRegisteredRequestHandler(
+                    nameof(PreFightRequest),
+                    harness.Session,
+                    preFightPacketId,
+                    new PreFightRequest
+                    {
+                        PreFightData = new()
+                        {
+                            ChallengeCount = 1,
+                            StageId = stageId,
+                            CardIds = [],
+                            RobotIds = [],
+                            FirstFightPos = 1,
+                            CaptainPos = 1,
+                            IsHasAssist = false
+                        }
+                    });
+                PreFightResponse response = ReadResponsePayload<PreFightResponse>(
+                    harness,
+                    preFightPacketId,
+                    nameof(PreFightResponse),
+                    $"{name} PreFightResponse");
+                AssertEqual(0, response.Code, $"{name} PreFightResponse Code");
+                if (response.FightData is null || response.FightData.StageId != stageId)
+                    throw new InvalidDataException($"{name}: expected FightData for Study stage {stageId}.");
+                if (!response.FightData.RoleData.Any(role => role.Id == (uint)testPlayerId))
+                    throw new InvalidDataException($"{name}: expected player {testPlayerId} in FightData.RoleData.");
+                return response;
+            }
+
+            static (NotifyStageData StagePush, JObject? TeachingUpdate, FightSettleResponse Response) CompleteStudyFight(
+                LoopbackSessionHarness harness,
+                uint stageId,
+                long testPlayerId,
+                int preFightPacketId,
+                int fightSettlePacketId,
+                bool expectTeachingUpdate,
+                string name)
+            {
+                PreFightResponse preFightResponse = StartStudyFight(harness, stageId, testPlayerId, preFightPacketId, name);
+                if (preFightResponse.FightData is null)
+                    throw new InvalidDataException($"{name}: expected PreFight FightData.");
+
+                InvokeRegisteredRequestHandler(
+                    nameof(FightSettleRequest),
+                    harness.Session,
+                    fightSettlePacketId,
+                    CreateMissingStageSettleRequest(stageId, preFightResponse.FightData.FightId, testPlayerId));
+
+                NotifyStageData? stagePush = null;
+                JObject? teachingUpdate = null;
+                int stagePushIndex = -1;
+                int teachingUpdateIndex = -1;
+                List<string> pushNames = [];
+                FightSettleResponse? settleResponse = null;
+                for (int packetIndex = 0; packetIndex < 32; packetIndex++)
+                {
+                    Packet packet = harness.ReadPacket($"{name} FightSettle packet {packetIndex + 1}");
+                    if (packet.Type == Packet.ContentType.Push)
+                    {
+                        Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                        int pushIndex = pushNames.Count;
+                        pushNames.Add(push.Name);
+                        if (push.Name == nameof(NotifyStageData))
+                        {
+                            if (stagePush is not null)
+                                throw new InvalidDataException($"{name}: expected exactly one {nameof(NotifyStageData)} push, observed {DescribePushes(pushNames)}.");
+                            stagePush = MessagePackSerializer.Deserialize<NotifyStageData>(push.Content);
+                            stagePushIndex = pushIndex;
+                        }
+                        else if (push.Name == "NotifyTeachingUpdateStageInfo")
+                        {
+                            if (teachingUpdate is not null)
+                                throw new InvalidDataException($"{name}: expected at most one NotifyTeachingUpdateStageInfo push, observed {DescribePushes(pushNames)}.");
+                            teachingUpdate = JObject.Parse(MessagePackSerializer.ConvertToJson(push.Content));
+                            teachingUpdateIndex = pushIndex;
+                        }
+
+                        continue;
+                    }
+
+                    AssertEqual(Packet.ContentType.Response, packet.Type, $"{name} FightSettle packet type");
+                    Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+                    AssertEqual(fightSettlePacketId, response.Id, $"{name} FightSettleResponse packet id");
+                    AssertEqual(nameof(FightSettleResponse), response.Name, $"{name} FightSettleResponse packet name");
+                    settleResponse = MessagePackSerializer.Deserialize<FightSettleResponse>(response.Content);
+                    break;
+                }
+
+                if (stagePush is null || settleResponse is null)
+                    throw new InvalidDataException($"{name}: expected {nameof(NotifyStageData)} and {nameof(FightSettleResponse)} within 32 FightSettle packets; observed {DescribePushes(pushNames)}.");
+                if (expectTeachingUpdate)
+                {
+                    if (teachingUpdate is null || teachingUpdateIndex != stagePushIndex + 1)
+                        throw new InvalidDataException($"{name}: expected NotifyTeachingUpdateStageInfo immediately after {nameof(NotifyStageData)}; observed {DescribePushes(pushNames)}.");
+                }
+                else if (teachingUpdate is not null)
+                {
+                    throw new InvalidDataException($"{name}: Practice stage must not send NotifyTeachingUpdateStageInfo; observed {DescribePushes(pushNames)}.");
+                }
+
+                return (stagePush, teachingUpdate, settleResponse);
+            }
+            static string DescribePushes(IReadOnlyList<string> pushNames) => string.Join(", ", pushNames);
+
+
+            static void AssertPassedStudyStage(
+                NotifyStageData stagePush,
+                LoopbackSessionHarness harness,
+                uint stageId,
+                uint nextStageId,
+                string name)
+            {
+                StageDatum pushedStage = stagePush.StageList.SingleOrDefault(stage => stage.StageId == stageId)
+                    ?? throw new InvalidDataException($"{name}: {nameof(NotifyStageData)} omitted passed stage {stageId}.");
+                AssertEqual(true, pushedStage.Passed, $"{name} pushed StageDatum.Passed");
+                AssertEqual(7L, pushedStage.StarsMark, $"{name} pushed StageDatum.StarsMark");
+                if (!harness.Session.stage.Stages.TryGetValue(stageId, out StageDatum? persistedStage))
+                    throw new InvalidDataException($"{name}: stage {stageId} was not persisted.");
+                AssertEqual(true, persistedStage.Passed, $"{name} persisted StageDatum.Passed");
+                AssertEqual(7L, persistedStage.StarsMark, $"{name} persisted StageDatum.StarsMark");
+                if (harness.Session.stage.Stages.ContainsKey(nextStageId))
+                    throw new InvalidDataException($"{name}: successor stage {nextStageId} must remain absent until cleared.");
+            }
+            static AscNet.Common.Database.Stage RehydratePersistedStudyStage(
+                RecordingMongoCollectionProxy<AscNet.Common.Database.Stage> stageCollection,
+                int expectedSaveCount,
+                uint expectedStageId,
+                string name)
+            {
+                AssertEqual(expectedSaveCount, stageCollection.ReplaceOneCalls, $"{name} Stage.Save count");
+                AscNet.Common.Database.Stage savedStage = stageCollection.LastReplacement
+                    ?? throw new InvalidDataException($"{name}: Stage.Save did not replace a Stage document.");
+                if (!savedStage.Stages.TryGetValue(expectedStageId, out StageDatum? savedStageDatum))
+                    throw new InvalidDataException($"{name}: saved Stage document omitted cleared stage {expectedStageId}.");
+                AssertEqual(true, savedStageDatum.Passed, $"{name} saved StageDatum.Passed");
+
+                return new AscNet.Common.Database.Stage
+                {
+                    Id = savedStage.Id,
+                    Uid = savedStage.Uid,
+                    Stages = savedStage.Stages.ToDictionary(
+                        pair => pair.Key,
+                        pair => MessagePackSerializer.Deserialize<StageDatum>(
+                            MessagePackSerializer.Serialize(pair.Value))),
+                    Course = savedStage.Course.ToList(),
+                    PrequelRewardedStages = savedStage.PrequelRewardedStages.ToList(),
+                    FinishedTasks = savedStage.FinishedTasks.ToList()
+                };
+            }
+
+
+            static Dictionary<string, Packet.Push> InvokeLoginAndReadStartupPushes(
+                LoopbackSessionHarness harness,
+                MethodInfo doLogin,
+                string name)
+            {
+                doLogin.Invoke(null, [harness.Session]);
+                Dictionary<string, Packet.Push> pushesByName = new(StringComparer.Ordinal);
+                for (int packetIndex = 0; packetIndex < 192; packetIndex++)
+                {
+                    Packet packet = harness.ReadPacket($"{name} startup push {packetIndex + 1}");
+                    AssertEqual(Packet.ContentType.Push, packet.Type, $"{name} startup packet type");
+                    Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+                    pushesByName.TryAdd(push.Name, push);
+                    if (push.Name == "NotifyWheelchairManualActivityUpdate")
+                        return pushesByName;
+                }
+
+                throw new InvalidDataException($"{name}: did not observe retail startup tail NotifyWheelchairManualActivityUpdate.");
+            }
+
+            static NotifyPracticeData ReadPracticeLoginData(IReadOnlyDictionary<string, Packet.Push> pushesByName, string name)
+            {
+                if (!pushesByName.TryGetValue(nameof(NotifyPracticeData), out Packet.Push? practicePush))
+                    throw new InvalidDataException($"{name}: AccountModule.DoLogin omitted {nameof(NotifyPracticeData)}.");
+                return MessagePackSerializer.Deserialize<NotifyPracticeData>(practicePush.Content);
+            }
+
+            static JArray ReadTeachingLoginActivities(IReadOnlyDictionary<string, Packet.Push> pushesByName, string name)
+            {
+                if (!pushesByName.TryGetValue("NotifyTeachingActivityInfo", out Packet.Push? teachingPush))
+                    throw new InvalidDataException($"{name}: AccountModule.DoLogin omitted NotifyTeachingActivityInfo.");
+                JObject payload = JObject.Parse(MessagePackSerializer.ConvertToJson(teachingPush.Content));
+                return (JArray)RequiredToken(payload, "ActivityInfo", JTokenType.Array, $"{name} NotifyTeachingActivityInfo");
+            }
+
+            static void AssertPracticeLoginStage(
+                IReadOnlyDictionary<string, Packet.Push> pushesByName,
+                int expectedChapterId,
+                uint expectedStageId,
+                string name)
+            {
+                NotifyPracticeData practiceData = ReadPracticeLoginData(pushesByName, name);
+                NotifyPracticeData.NotifyPracticeDataChapterInfo chapter = practiceData.ChapterInfos.SingleOrDefault(info => info.Id == expectedChapterId)
+                    ?? throw new InvalidDataException($"{name}: {nameof(NotifyPracticeData)} omitted chapter {expectedChapterId}.");
+                AssertIntegerList([expectedStageId], chapter.FinishStages.Select(stageId => (long)stageId).ToArray(), $"{name} {nameof(NotifyPracticeData)} ChapterInfos[{expectedChapterId}].FinishStages");
+            }
+
+            static void AssertNoPracticeLoginStage(
+                IReadOnlyDictionary<string, Packet.Push> pushesByName,
+                uint forbiddenStageId,
+                string name)
+            {
+                NotifyPracticeData practiceData = ReadPracticeLoginData(pushesByName, name);
+                if (practiceData.ChapterInfos.Any(chapter => chapter.FinishStages.Contains(forbiddenStageId)))
+                    throw new InvalidDataException($"{name}: {nameof(NotifyPracticeData)} must not contain Teaching stage {forbiddenStageId}.");
+            }
+
+            static void AssertTeachingLoginStage(
+                IReadOnlyDictionary<string, Packet.Push> pushesByName,
+                int expectedActivityId,
+                uint expectedStageId,
+                string name)
+            {
+                JObject activity = ReadTeachingLoginActivities(pushesByName, name)
+                    .OfType<JObject>()
+                    .SingleOrDefault(info => RequiredValue<long>(info, "Id", JTokenType.Integer, $"{name} NotifyTeachingActivityInfo.ActivityInfo") == expectedActivityId)
+                    ?? throw new InvalidDataException($"{name}: NotifyTeachingActivityInfo omitted activity {expectedActivityId}.");
+                JArray starRecords = (JArray)RequiredToken(activity, "StarRecords", JTokenType.Array, $"{name} NotifyTeachingActivityInfo.ActivityInfo[{expectedActivityId}]");
+                JObject stageRecord = starRecords
+                    .OfType<JObject>()
+                    .SingleOrDefault(record => RequiredValue<long>(record, "Id", JTokenType.Integer, $"{name} NotifyTeachingActivityInfo.ActivityInfo[{expectedActivityId}].StarRecords") == expectedStageId)
+                    ?? throw new InvalidDataException($"{name}: NotifyTeachingActivityInfo omitted stage {expectedStageId} in activity {expectedActivityId}.");
+                AssertEqual(7L, RequiredValue<long>(stageRecord, "StarsMark", JTokenType.Integer, $"{name} NotifyTeachingActivityInfo.ActivityInfo[{expectedActivityId}].StarRecords[{expectedStageId}]"), $"{name} NotifyTeachingActivityInfo StarsMark");
+            }
+
+            static void AssertNoTeachingLoginStage(
+                IReadOnlyDictionary<string, Packet.Push> pushesByName,
+                uint forbiddenStageId,
+                string name)
+            {
+                bool found = ReadTeachingLoginActivities(pushesByName, name)
+                    .OfType<JObject>()
+                    .SelectMany(info => ((JArray)RequiredToken(info, "StarRecords", JTokenType.Array, $"{name} NotifyTeachingActivityInfo.ActivityInfo")).OfType<JObject>())
+                    .Any(record => RequiredValue<long>(record, "Id", JTokenType.Integer, $"{name} NotifyTeachingActivityInfo.ActivityInfo.StarRecords") == forbiddenStageId);
+                if (found)
+                    throw new InvalidDataException($"{name}: NotifyTeachingActivityInfo must not contain Practice stage {forbiddenStageId}.");
+            }
         }
 
         private static void ValidateStoryDeployVersionGapCompatibility()

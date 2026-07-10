@@ -317,7 +317,7 @@ namespace AscNet.GameServer.Handlers
         {
             PreFightRequest req = MessagePackSerializer.Deserialize<PreFightRequest>(packet.Content);
 
-            StageTable? stageTable = TableReaderV2.Parse<StageTable>().Find(x => x.StageId == req.PreFightData.StageId);
+            StageTable? stageTable = ResolveStageTable(req.PreFightData.StageId, out bool isCurrentStudyStage);
             if (stageTable is null && !MainLineLuosaitaPayloadFactory.HasCapturedStageProgress((int)req.PreFightData.StageId))
             {
                 string cardIds = req.PreFightData.CardIds is null
@@ -326,12 +326,9 @@ namespace AscNet.GameServer.Handlers
                 session.log.Warn($"[STAGE-PROBE] PreFightStageTableMissing stageId={req.PreFightData.StageId} challengeCount={req.PreFightData.ChallengeCount} cardIds={cardIds}");
             }
 
-            var levelControl = stageTable is null
-                ? null
-                : TableReaderV2.Parse<Table.V2.share.fuben.StageLevelControlTable>()
-                    .Where(x => x.StageId == stageTable.StageId)
-                    .OrderBy(x => Math.Abs(session.player.PlayerData.Level - x.MaxLevel))
-                    .FirstOrDefault();
+            StageLevelControlTable? levelControl = ResolveStageLevelControl(
+                req.PreFightData.StageId,
+                (int)session.player.PlayerData.Level);
 
             PreFightResponse rsp = new()
             {
@@ -362,9 +359,23 @@ namespace AscNet.GameServer.Handlers
             IReadOnlyList<uint> cardIdsToDeploy = (req.PreFightData.CardIds ?? [])
                 .Where(cardId => cardId > 0)
                 .ToList();
-            List<int> robotIds = stageTable?.RobotId
-                ?? req.PreFightData.RobotIds?.Where(robotId => robotId > 0).ToList()
-                ?? new();
+            List<int> requestedRobotIds = req.PreFightData.RobotIds?
+                .Where(robotId => robotId > 0)
+                .ToList() ?? [];
+            List<int> robotIds;
+            if (CurrentClientStudyTables.TryGetConfiguredRobotIds(req.PreFightData.StageId, out IReadOnlyList<int> configuredStudyRobotIds))
+            {
+                List<int> validRequestedRobotIds = requestedRobotIds
+                    .Where(configuredStudyRobotIds.Contains)
+                    .ToList();
+                robotIds = validRequestedRobotIds.Count > 0
+                    ? validRequestedRobotIds
+                    : configuredStudyRobotIds.ToList();
+            }
+            else
+            {
+                robotIds = stageTable?.RobotId ?? requestedRobotIds;
+            }
 
             bool isTheatreFight = BiancaTheatreModule.TryGetTheatreFightDeployment(
                 session,
@@ -379,13 +390,20 @@ namespace AscNet.GameServer.Handlers
                 robotIds = theatreRobotIds.ToList();
             }
 
+            Dictionary<int, RobotTable> robotRowsToDeploy = new();
             if (robotIds.Count > 0)
             {
-                HashSet<int> deployableRobotIds = TableReaderV2.Parse<RobotTable>()
-                    .Where(robot => robot.CharacterId is > 0)
-                    .Select(robot => robot.Id)
-                    .ToHashSet();
-                robotIds = robotIds.Where(deployableRobotIds.Contains).ToList();
+                List<int> deployableRobotIds = new(robotIds.Count);
+                foreach (int robotId in robotIds)
+                {
+                    RobotTable? robot = ResolveRobotTable(robotId, isCurrentStudyStage);
+                    if (robot?.CharacterId is not > 0)
+                        continue;
+
+                    deployableRobotIds.Add(robotId);
+                    robotRowsToDeploy.TryAdd(robotId, robot);
+                }
+                robotIds = deployableRobotIds;
             }
 
             if (robotIds.Count == 0 && cardIdsToDeploy.Count == 0)
@@ -432,7 +450,7 @@ namespace AscNet.GameServer.Handlers
                 int npcKey = rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Keys.Count;
                 foreach (var robotId in robotIds)
                 {
-                    RobotTable? robot = TableReaderV2.Parse<RobotTable>().Find(x => x.Id == robotId);
+                    RobotTable? robot = robotRowsToDeploy.GetValueOrDefault(robotId);
                     if (robot is null)
                     {
                         session.log.Warn($"[STAGE-PROBE] PreFightRobotTableMissing stageId={req.PreFightData.StageId} robotId={robotId}");
@@ -568,18 +586,15 @@ namespace AscNet.GameServer.Handlers
         public static void FightSettleRequestHandler(Session session, Packet.Request packet)
         {
             FightSettleRequest req = MessagePackSerializer.Deserialize<FightSettleRequest>(packet.Content);
-            StageTable? stageTable = TableReaderV2.Parse<StageTable>().FirstOrDefault(x => x.StageId == req.Result.StageId);
+            StageTable? stageTable = ResolveStageTable(req.Result.StageId, out _);
             if (stageTable is null && !MainLineLuosaitaPayloadFactory.HasCapturedStageProgress((int)req.Result.StageId))
             {
                 session.log.Warn($"[STAGE-PROBE] FightSettleStageTableMissing stageId={req.Result.StageId} fightId={req.Result.FightId}");
             }
 
-            StageLevelControlTable? levelControl = stageTable is null
-                ? null
-                : TableReaderV2.Parse<StageLevelControlTable>()
-                    .Where(x => x.StageId == stageTable.StageId)
-                    .OrderBy(x => Math.Abs(session.player.PlayerData.Level - x.MaxLevel))
-                    .FirstOrDefault();
+            StageLevelControlTable? levelControl = ResolveStageLevelControl(
+                req.Result.StageId,
+                (int)session.player.PlayerData.Level);
             int challengeCount = session.fight?.PreFight.PreFightData.ChallengeCount ?? 1;
             uint responseStageId = ResolveFightSettleStageId(session, req);
             bool isQuickClear = responseStageId != req.Result.StageId;
@@ -739,9 +754,40 @@ namespace AscNet.GameServer.Handlers
 
             session.fight = null;
             session.SendPush(new NotifyStageData() { StageList = new() { stageData } });
-            SendMainLineLuosaitaSectionInfoIfCaptured(session, (int)req.Result.StageId);
-            TaskModule.SendStoryTaskSync(session);
+            StudyProgressModule.SendTeachingStageUpdate(session, stageData);
+            bool sentTheatreProgress = BiancaTheatreModule.TrySendTheatreFightClearProgress(session, req.Result.StageId);
+            if (!sentTheatreProgress)
+            {
+                SendMainLineLuosaitaSectionInfoIfCaptured(session, (int)req.Result.StageId);
+                TaskModule.SendStoryTaskSync(session);
+            }
             session.SendResponse(fightSettleResponse, packet.Id);
+        }
+
+        private static StageTable? ResolveStageTable(uint stageId, out bool isCurrentStudyStage)
+        {
+            isCurrentStudyStage = CurrentClientStudyTables.TryGetStage(stageId, out StageTable currentStage);
+            return isCurrentStudyStage
+                ? currentStage
+                : TableReaderV2.Parse<StageTable>().FirstOrDefault(stage => stage.StageId == stageId);
+        }
+
+        private static StageLevelControlTable? ResolveStageLevelControl(uint stageId, int playerLevel)
+        {
+            IEnumerable<StageLevelControlTable> controls = CurrentClientStudyTables.TryGetStageLevelControls(stageId, out IReadOnlyList<StageLevelControlTable> currentControls)
+                ? currentControls
+                : TableReaderV2.Parse<StageLevelControlTable>().Where(control => control.StageId == stageId);
+            return controls
+                .OrderBy(control => Math.Abs(playerLevel - control.MaxLevel))
+                .FirstOrDefault();
+        }
+
+        private static RobotTable? ResolveRobotTable(int robotId, bool isCurrentStudyStage)
+        {
+            if (isCurrentStudyStage)
+                return CurrentClientStudyTables.TryGetRobot(robotId, out RobotTable currentRobot) ? currentRobot : null;
+
+            return TableReaderV2.Parse<RobotTable>().FirstOrDefault(robot => robot.Id == robotId);
         }
 
         private static bool IsMainLine2AchievementStage(uint stageId)
