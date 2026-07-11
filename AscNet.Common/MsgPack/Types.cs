@@ -109,6 +109,8 @@ namespace AscNet.Common.MsgPack
         public EquipResonanceType Type { get; set; }
         public int CharacterId { get; set; }
         public int TemplateId { get; set; }
+        public int UseItemId { get; set; }
+        public bool IsUseEquip { get; set; }
     }
 
     public enum EquipResonanceType
@@ -2943,7 +2945,7 @@ namespace AscNet.Common.MsgPack
         public Int32 Exp { get; set; }
         public Int32 Breakthrough { get; set; }
         public List<ResonanceInfo> ResonanceInfo { get; set; } = new();
-        public List<dynamic> UnconfirmedResonanceInfo { get; set; } = new();
+        public List<ResonanceInfo> UnconfirmedResonanceInfo { get; set; } = new();
         public List<dynamic> AwakeSlotList { get; set; } = new();
         public Boolean IsLock { get; set; }
         public UInt32 CreateTime { get; set; }

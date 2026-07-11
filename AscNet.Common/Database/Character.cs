@@ -70,6 +70,54 @@ namespace AscNet.Common.Database
                 .FirstOrDefault(row => row.EquipId == templateId && row.Times == breakthrough);
         }
 
+        public static bool NormalizeEquipResonances(EquipData equip)
+        {
+            EquipTable? equipTable = TableReaderV2.Parse<EquipTable>()
+                .Find(row => row.Id == equip.TemplateId);
+            bool isWeapon = equipTable is { Site: 0, WeaponSkillId: > 0 };
+            List<ResonanceInfo> active = NormalizeResonanceList(equip.ResonanceInfo, isWeapon);
+            List<ResonanceInfo> pending = NormalizeResonanceList(equip.UnconfirmedResonanceInfo, isWeapon);
+            bool changed = equip.ResonanceInfo is null
+                || equip.UnconfirmedResonanceInfo is null
+                || !equip.ResonanceInfo.SequenceEqual(active)
+                || !equip.UnconfirmedResonanceInfo.SequenceEqual(pending);
+            equip.ResonanceInfo = active;
+            equip.UnconfirmedResonanceInfo = pending;
+            return changed;
+        }
+
+        private static List<ResonanceInfo> NormalizeResonanceList(
+            IEnumerable<ResonanceInfo>? resonances,
+            bool isWeapon)
+        {
+            return (resonances ?? [])
+                .Where(resonance => IsValidResonance(resonance, isWeapon))
+                .GroupBy(resonance => resonance.Slot)
+                .Select(slot => slot.Last())
+                .ToList();
+        }
+
+        private static bool IsValidResonance(ResonanceInfo resonance, bool isWeapon)
+        {
+            if (resonance.Slot <= 0 || resonance.TemplateId <= 0)
+                return false;
+            if (resonance.Type is EquipResonanceType.Attrib or EquipResonanceType.WeaponSkill)
+                return true;
+            if (isWeapon && resonance.Type == EquipResonanceType.CharacterSkill)
+                return false;
+            if (resonance.Type != EquipResonanceType.CharacterSkill || resonance.CharacterId <= 0)
+                return false;
+
+            CharacterSkillTable? characterSkills = TableReaderV2.Parse<CharacterSkillTable>()
+                .Find(row => row.CharacterId == resonance.CharacterId);
+            if (characterSkills is null)
+                return false;
+
+            return characterSkills.SkillGroupId
+                .Select(groupId => TableReaderV2.Parse<CharacterSkillGroupTable>().Find(group => group.Id == groupId))
+                .Any(group => group?.SkillId.Contains(resonance.TemplateId) == true);
+        }
+
         public bool NormalizeEquipsForCurrentTables()
         {
             if (Equips is null)
@@ -144,6 +192,9 @@ namespace AscNet.Common.Database
                     equip.UnconfirmedResonanceInfo = new();
                     changed = true;
                 }
+
+                if (NormalizeEquipResonances(equip))
+                    changed = true;
 
                 if (equip.AwakeSlotList is null)
                 {

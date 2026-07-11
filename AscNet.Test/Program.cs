@@ -67,6 +67,18 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--equip-resonance-compat-only"))
+                {
+                    ValidateEquipResonanceCompatibility();
+                    return;
+                }
+
+                if (args.Contains("--weapon-overrun-compat-only"))
+                {
+                    ValidateWeaponOverrunCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--login-account-compat-only"))
                 {
                     ValidateLoginAccountCompatibility();
@@ -405,6 +417,335 @@ namespace AscNet.Test
                 Environment.ExitCode = 1;
             }
         }
+
+        private static void ValidateWeaponOverrunCompatibility()
+        {
+            const uint equipId = 1457;
+            EquipData equip = new()
+            {
+                Id = equipId,
+                TemplateId = 2386001,
+                Level = 45,
+                WeaponOverrunData = new()
+            };
+            AscNet.Common.Database.Character character = new()
+            {
+                Uid = equipId,
+                Characters = [],
+                Equips = [equip],
+                Fashions = []
+            };
+            AscNet.Common.Database.Inventory inventory = new()
+            {
+                Uid = character.Uid,
+                Items =
+                [
+                    new Item { Id = 34000, Count = 239, CreateTime = 1, RefreshTime = 1 },
+                    new Item { Id = 47, Count = 18583, CreateTime = 1, RefreshTime = 1 }
+                ]
+            };
+
+            using LoopbackSessionHarness harness = new(character, inventory: inventory);
+            InvokeRequestHandler(
+                harness,
+                nameof(EquipWeaponOverrunLevelUpRequest),
+                16_109,
+                new EquipWeaponOverrunLevelUpRequest { EquipId = (int)equipId });
+            AssertItemPush(
+                harness.ReadPacket("EquipWeaponOverrunLevelUpRequest item push"),
+                34000,
+                214,
+                "EquipWeaponOverrunLevelUpRequest item push");
+            EquipWeaponOverrunLevelUpResponse levelResponse =
+                ReadResponsePayload<EquipWeaponOverrunLevelUpResponse>(
+                    harness.ReadPacket("EquipWeaponOverrunLevelUpResponse"),
+                    nameof(EquipWeaponOverrunLevelUpResponse));
+            AssertEqual(0, levelResponse.Code, "EquipWeaponOverrunLevelUpResponse code");
+            AssertEqual(1, levelResponse.WeaponOverrunData.Level, "EquipWeaponOverrunLevelUpResponse level");
+            AssertEqual(0, levelResponse.WeaponOverrunData.ActiveSuits.Count, "EquipWeaponOverrunLevelUpResponse active suits");
+            AssertEqual(0, levelResponse.WeaponOverrunData.ChoseSuit, "EquipWeaponOverrunLevelUpResponse chosen suit");
+
+            InvokeRequestHandler(
+                harness,
+                nameof(EquipWeaponActiveOverrunSuitRequest),
+                16_114,
+                new EquipWeaponActiveOverrunSuitRequest { EquipId = (int)equipId, SuitId = 1606 });
+            AssertItemPush(
+                harness.ReadPacket("EquipWeaponActiveOverrunSuitRequest item push"),
+                47,
+                17383,
+                "EquipWeaponActiveOverrunSuitRequest item push");
+            EquipWeaponActiveOverrunSuitResponse activeResponse =
+                ReadResponsePayload<EquipWeaponActiveOverrunSuitResponse>(
+                    harness.ReadPacket("EquipWeaponActiveOverrunSuitResponse"),
+                    nameof(EquipWeaponActiveOverrunSuitResponse));
+            AssertEqual(0, activeResponse.Code, "EquipWeaponActiveOverrunSuitResponse code");
+            AssertIntegerList([1606], activeResponse.WeaponOverrunData.ActiveSuits.Select(id => (long)id).ToArray(), "EquipWeaponActiveOverrunSuitResponse active suits");
+            AssertEqual(0, activeResponse.WeaponOverrunData.ChoseSuit, "EquipWeaponActiveOverrunSuitResponse chosen suit");
+
+            InvokeRequestHandler(
+                harness,
+                nameof(EquipWeaponChoseOverrunSuitRequest),
+                16_115,
+                new EquipWeaponChoseOverrunSuitRequest { EquipId = (int)equipId, SuitId = 1606 });
+            EquipWeaponChoseOverrunSuitResponse choseResponse =
+                ReadResponsePayload<EquipWeaponChoseOverrunSuitResponse>(
+                    harness.ReadPacket("EquipWeaponChoseOverrunSuitResponse"),
+                    nameof(EquipWeaponChoseOverrunSuitResponse));
+            AssertEqual(0, choseResponse.Code, "EquipWeaponChoseOverrunSuitResponse code");
+            AssertIntegerList([1606], choseResponse.WeaponOverrunData.ActiveSuits.Select(id => (long)id).ToArray(), "EquipWeaponChoseOverrunSuitResponse active suits");
+            AssertEqual(1606, choseResponse.WeaponOverrunData.ChoseSuit, "EquipWeaponChoseOverrunSuitResponse chosen suit");
+        }
+
+        private static void InvokeRequestHandler<TRequest>(
+            LoopbackSessionHarness harness,
+            string requestName,
+            int packetId,
+            TRequest request)
+        {
+            GetRegisteredRequestHandler(requestName).Invoke(
+                harness.Session,
+                new Packet.Request
+                {
+                    Id = packetId,
+                    Name = requestName,
+                    Content = MessagePackSerializer.Serialize(request)
+                });
+        }
+
+        private static TResponse ReadResponsePayload<TResponse>(Packet packet, string responseName)
+        {
+            AssertEqual(Packet.ContentType.Response, packet.Type, $"{responseName} packet type");
+            Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+            AssertEqual(responseName, response.Name, $"{responseName} packet name");
+            return MessagePackSerializer.Deserialize<TResponse>(response.Content);
+        }
+
+        private static void AssertItemPush(Packet packet, int itemId, long expectedCount, string name)
+        {
+            AssertEqual(Packet.ContentType.Push, packet.Type, $"{name} packet type");
+            Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(packet.Content);
+            AssertEqual(nameof(NotifyItemDataList), push.Name, $"{name} packet name");
+            NotifyItemDataList payload = MessagePackSerializer.Deserialize<NotifyItemDataList>(push.Content);
+            Item item = payload.ItemDataList.Single();
+            AssertEqual(itemId, item.Id, $"{name} item id");
+            AssertEqual(expectedCount, item.Count, $"{name} item count");
+        }
+
+        private static void ValidateEquipResonanceCompatibility()
+        {
+            EquipResonanceRequest request = MessagePackSerializer.Deserialize<EquipResonanceRequest>(
+                MessagePackSerializer.Serialize(new EquipResonanceRequest
+                {
+                    EquipId = 2848,
+                    Slots = [3],
+                    UseItemId = 3002,
+                    SelectSkillIds = [102],
+                    SelectType = EquipResonanceType.WeaponSkill,
+                    CharacterId = 1021007
+                }));
+            if (request.EquipId != 2848
+                || request.Slots.Count != 1
+                || request.Slots[0] != 3
+                || request.UseItemId != 3002
+                || request.CharacterId != 1021007
+                || request.SelectType != EquipResonanceType.WeaponSkill
+                || request.SelectSkillIds is not { Count: 1 }
+                || request.SelectSkillIds[0] != 102)
+            {
+                throw new InvalidDataException("EquipResonanceRequest does not preserve the current client contract.");
+            }
+
+            ResonanceInfo resonance = new()
+            {
+                Slot = 3,
+                Type = EquipResonanceType.WeaponSkill,
+                CharacterId = 1021007,
+                TemplateId = 102,
+                UseItemId = 3002,
+                IsUseEquip = false
+            };
+            string responseJson = MessagePackSerializer.ConvertToJson(
+                MessagePackSerializer.Serialize(new EquipResonanceResponse { ResonanceDatas = [resonance] }));
+            JObject response = JObject.Parse(responseJson);
+            if (response["ResonanceDatas"] is not JArray { Count: 1 } resonanceDatas
+                || resonanceDatas[0]?["UseItemId"]?.Value<int>() != 3002
+                || resonanceDatas[0]?["CharacterId"]?.Value<int>() != 1021007
+                || resonanceDatas[0]?["Type"]?.Value<int>() != (int)EquipResonanceType.WeaponSkill
+                || resonanceDatas[0]?["TemplateId"]?.Value<int>() != request.SelectSkillIds[0])
+            {
+                throw new InvalidDataException("EquipResonanceResponse does not match the current client contract.");
+            }
+
+            EquipResonanceConfirmRequest confirm = MessagePackSerializer.Deserialize<EquipResonanceConfirmRequest>(
+                MessagePackSerializer.Serialize(new EquipResonanceConfirmRequest
+                {
+                    EquipId = 1607,
+                    Slot = 1,
+                    IsUse = true
+                }));
+            EquipData pendingRoundTrip = MessagePackSerializer.Deserialize<EquipData>(
+                MessagePackSerializer.Serialize(new EquipData
+                {
+                    Id = 1607,
+                    UnconfirmedResonanceInfo = [resonance]
+                }));
+            if (confirm.EquipId != 1607
+                || confirm.Slot != 1
+                || !confirm.IsUse
+                || pendingRoundTrip.UnconfirmedResonanceInfo is not [{ TemplateId: 102 }])
+            {
+                throw new InvalidDataException("Equip resonance confirmation does not preserve pending state.");
+            }
+
+            ValidateEquipResonanceSelectionAndSwapBehavior();
+        }
+
+        private static void ValidateEquipResonanceSelectionAndSwapBehavior()
+        {
+            const uint equipUid = 1607;
+            const uint equipTemplateId = 2016001;
+            const int materialId = 3002;
+            const int firstSelectedSkillId = 102;
+            const int swappedSkillId = 101;
+            const int characterId = 1021007;
+            EquipData equip = new()
+            {
+                Id = equipUid,
+                TemplateId = equipTemplateId,
+                Level = 1,
+                ResonanceInfo =
+                [
+                    new ResonanceInfo { Slot = 1, Type = EquipResonanceType.CharacterSkill, CharacterId = 1341002, TemplateId = 132201 },
+                    new ResonanceInfo { Slot = 2, Type = EquipResonanceType.CharacterSkill, CharacterId = 1341002, TemplateId = 132206 },
+                    new ResonanceInfo { Slot = 3, Type = EquipResonanceType.CharacterSkill, CharacterId = 1341002, TemplateId = 132211 }
+                ],
+                UnconfirmedResonanceInfo =
+                [
+                    new ResonanceInfo { Slot = 3, Type = EquipResonanceType.CharacterSkill, CharacterId = 1341002, TemplateId = 132216 }
+                ],
+                AwakeSlotList = []
+            };
+            EquipData persistedBrokenEquip = MessagePackSerializer.Deserialize<EquipData>(
+                MessagePackSerializer.Serialize(equip));
+            if (!AscNet.Common.Database.Character.NormalizeEquipResonances(persistedBrokenEquip)
+                || persistedBrokenEquip.ResonanceInfo.Count != 0
+                || persistedBrokenEquip.UnconfirmedResonanceInfo.Count != 0)
+            {
+                throw new InvalidDataException("Persisted weapon CharacterSkill resonance records were not removed.");
+            }
+            EquipData validMemoryEquip = new()
+            {
+                TemplateId = 3015001,
+                ResonanceInfo =
+                [
+                    new ResonanceInfo
+                    {
+                        Slot = 1,
+                        Type = EquipResonanceType.CharacterSkill,
+                        CharacterId = 1341002,
+                        TemplateId = 132201
+                    }
+                ],
+                UnconfirmedResonanceInfo = []
+            };
+            if (AscNet.Common.Database.Character.NormalizeEquipResonances(validMemoryEquip)
+                || validMemoryEquip.ResonanceInfo is not [{ TemplateId: 132201 }])
+            {
+                throw new InvalidDataException("Valid non-weapon CharacterSkill resonance was removed.");
+            }
+            AscNet.Common.Database.Character character = new()
+            {
+                Uid = 1607,
+                Characters = [],
+                Equips = [equip],
+                Fashions = []
+            };
+            AscNet.Common.Database.Inventory inventory = new()
+            {
+                Uid = character.Uid,
+                Items =
+                [
+                    new Item
+                    {
+                        Id = materialId,
+                        Count = 2,
+                        CreateTime = 1,
+                        RefreshTime = 1
+                    }
+                ]
+            };
+
+            using LoopbackSessionHarness harness = new(character, inventory: inventory);
+            EquipResonanceRequest initialRequest = new()
+            {
+                EquipId = (int)equipUid,
+                Slots = [3],
+                UseItemId = materialId,
+                SelectSkillIds = [firstSelectedSkillId],
+                SelectType = EquipResonanceType.WeaponSkill,
+                CharacterId = characterId
+            };
+            GetRegisteredRequestHandler(nameof(EquipResonanceRequest)).Invoke(
+                harness.Session,
+                new Packet.Request
+                {
+                    Id = 16_071,
+                    Name = nameof(EquipResonanceRequest),
+                    Content = MessagePackSerializer.Serialize(initialRequest)
+                });
+
+            Packet initialPushPacket = harness.ReadPacket("EquipResonanceRequest material push");
+            AssertEqual(Packet.ContentType.Push, initialPushPacket.Type, "EquipResonanceRequest material push type");
+            EquipResonanceResponse initialResponse = ReadEquipResonanceResponse(
+                harness.ReadPacket("EquipResonanceRequest selected response"),
+                "EquipResonanceRequest selected response");
+            AssertEqual(0, initialResponse.Code, "EquipResonanceRequest selected response code");
+            ResonanceInfo initialResonance = initialResponse.ResonanceDatas.Single();
+            AssertEqual(firstSelectedSkillId, initialResonance.TemplateId, "EquipResonanceRequest selected skill");
+            AssertEqual((int)EquipResonanceType.WeaponSkill, (int)initialResonance.Type, "EquipResonanceRequest retail SelectType");
+            AssertEqual(characterId, initialResonance.CharacterId, "EquipResonanceRequest retail CharacterId");
+            AssertEqual(firstSelectedSkillId, equip.ResonanceInfo.Single().TemplateId, "EquipResonanceRequest immediately activates selected skill");
+            AssertEqual(0, equip.UnconfirmedResonanceInfo.Count, "EquipResonanceRequest selected flow has no confirmation state");
+            AssertEqual(1L, inventory.Items.Single(item => item.Id == materialId).Count, "EquipResonanceRequest material consumption");
+
+            EquipResonanceRequest swapRequest = new()
+            {
+                EquipId = (int)equipUid,
+                Slots = [3],
+                SelectSkillIds = [swappedSkillId],
+                SelectType = EquipResonanceType.WeaponSkill,
+                CharacterId = characterId
+            };
+            GetRegisteredRequestHandler(nameof(EquipResonanceRequest)).Invoke(
+                harness.Session,
+                new Packet.Request
+                {
+                    Id = 16_073,
+                    Name = nameof(EquipResonanceRequest),
+                    Content = MessagePackSerializer.Serialize(swapRequest)
+                });
+            EquipResonanceResponse swapResponse = ReadEquipResonanceResponse(
+                harness.ReadPacket("EquipResonanceRequest swap response"),
+                "EquipResonanceRequest swap response");
+            ResonanceInfo swappedResonance = swapResponse.ResonanceDatas.Single();
+            AssertEqual(0, swapResponse.Code, "EquipResonanceRequest swap response code");
+            AssertEqual(swappedSkillId, swappedResonance.TemplateId, "EquipResonanceRequest exact swapped skill");
+            AssertEqual((int)EquipResonanceType.WeaponSkill, (int)swappedResonance.Type, "EquipResonanceRequest swap preserves retail SelectType");
+            AssertEqual(characterId, swappedResonance.CharacterId, "EquipResonanceRequest swap preserves retail CharacterId");
+            AssertEqual(swappedSkillId, equip.ResonanceInfo.Single().TemplateId, "EquipResonanceRequest immediately activates swapped skill");
+            AssertEqual(0, equip.UnconfirmedResonanceInfo.Count, "EquipResonanceRequest swap has no confirmation state");
+            AssertEqual(1L, inventory.Items.Single(item => item.Id == materialId).Count, "EquipResonanceRequest swap does not consume material");
+        }
+
+        private static EquipResonanceResponse ReadEquipResonanceResponse(Packet packet, string name)
+        {
+            AssertEqual(Packet.ContentType.Response, packet.Type, $"{name} packet type");
+            Packet.Response response = MessagePackSerializer.Deserialize<Packet.Response>(packet.Content);
+            AssertEqual(nameof(EquipResonanceResponse), response.Name, $"{name} packet name");
+            return MessagePackSerializer.Deserialize<EquipResonanceResponse>(response.Content);
+        }
+
 
         private static void ValidateNotifyLoginCurrentClientCompatibilityShape()
         {
