@@ -1,6 +1,7 @@
 using AscNet.Common.MsgPack;
 using AscNet.Common.Util;
 using AscNet.Common;
+using Inventory = AscNet.Common.Database.Inventory;
 using AscNet.GameServer;
 using AscNet.GameServer.Handlers;
 using AscNet.SDKServer.Models;
@@ -290,6 +291,12 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--inventory-max-count-compat-only"))
+                {
+                    ValidateInventoryMaxCountCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--item-sell-compat-only"))
                 {
                     ValidateItemSellCompatibility();
@@ -406,6 +413,7 @@ namespace AscNet.Test
                 ValidateDrawCompatibility();
                 ValidateItemUseCompatibility();
                 ValidateItemSellCompatibility();
+                ValidateInventoryMaxCountCompatibility();
                 ValidateChatCompatibility();
                 ValidateCommandCompatibility();
                 ValidateMissingFeatureCompatibility();
@@ -7553,6 +7561,58 @@ namespace AscNet.Test
                 default:
                     throw new InvalidDataException($"{name}: unexpected reward type {(RewardType)reward.RewardType} for draw {drawInfo.Id}.");
             }
+        }
+
+        private static void ValidateInventoryMaxCountCompatibility()
+        {
+            Dictionary<int, ItemTable> itemRows = TableReaderV2.Parse<ItemTable>().ToDictionary(item => item.Id);
+            ItemTable basicWeaponTicket = itemRows[50001];
+            ItemTable assessmentShardChoice = itemRows[40906];
+            ItemTable constructShard = itemRows[402];
+            ItemTable scavengerTicket = itemRows[17];
+            ItemTable moneyWithoutTemplateMaximum = itemRows[Inventory.Coin];
+            ItemTable gift = itemRows.Values.First(item => item.ItemType == (int)ItemType.Gift);
+
+            AssertEqual(99_999, basicWeaponTicket.MaxCount, "Basic Weapon R&D Ticket template MaxCount");
+            AssertEqual(99_999L, Inventory.GetMaxCount(basicWeaponTicket), "Basic Weapon R&D Ticket effective MaxCount");
+            AssertEqual(9_999L, Inventory.GetMaxCount(assessmentShardChoice), "Assessment Manual Shard Choice effective MaxCount");
+            AssertEqual(999L, Inventory.GetMaxCount(constructShard), "Construct shard effective MaxCount");
+            AssertEqual(21L, Inventory.GetMaxCount(scavengerTicket), "Scavenger MK-II effective MaxCount");
+            AssertEqual(Inventory.GlobalItemMaxCount, Inventory.GetMaxCount(null), "Unknown item fallback MaxCount");
+            AssertEqual(Inventory.MoneyItemMaxCount, Inventory.GetMaxCount(moneyWithoutTemplateMaximum), "Money fallback MaxCount");
+
+            Inventory inventory = new()
+            {
+                Items =
+                [
+                    new Item { Id = basicWeaponTicket.Id, Count = 999 },
+                    new Item { Id = scavengerTicket.Id, Count = 20 }
+                ]
+            };
+            Item grantedTicket = inventory.Do(basicWeaponTicket.Id, 1_501);
+            AssertEqual(2_500L, grantedTicket.Count, "Basic Weapon R&D Ticket top-up count");
+            AssertEqual(2_500L, inventory.Items.Single(item => item.Id == basicWeaponTicket.Id).Count, "Basic Weapon R&D Ticket stored top-up count");
+            Item cappedScavengerTicket = inventory.Do(scavengerTicket.Id, 2);
+            AssertEqual(21L, cappedScavengerTicket.Count, "Scavenger MK-II configured maximum saturation");
+            AssertEqual(21L, inventory.Items.Single(item => item.Id == scavengerTicket.Id).Count, "Scavenger MK-II stored configured maximum");
+
+            inventory.Do(basicWeaponTicket.Id, 100_000);
+            AssertEqual(99_999L, grantedTicket.Count, "Basic Weapon R&D Ticket template maximum saturation");
+            inventory.Do(basicWeaponTicket.Id, int.MinValue);
+            AssertEqual(0L, grantedTicket.Count, "Basic Weapon R&D Ticket zero floor");
+
+            Type itemCommandType = RequiredAscNetGameServerType("AscNet.GameServer.Commands.ItemCommand");
+            MethodInfo getBatchAddMaxTargetCount = RequiredMethod(
+                itemCommandType,
+                "GetBatchAddMaxTargetCount",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(ItemTable)]);
+            long batchTargetCount = (long)(getBatchAddMaxTargetCount.Invoke(null, [basicWeaponTicket])
+                ?? throw new InvalidDataException("ItemCommand.GetBatchAddMaxTargetCount returned null."));
+            AssertEqual(Inventory.GlobalItemMaxCount, batchTargetCount, "ItemCommand bulk add safe maximum");
+            long giftBatchTargetCount = (long)(getBatchAddMaxTargetCount.Invoke(null, [gift])
+                ?? throw new InvalidDataException("ItemCommand.GetBatchAddMaxTargetCount returned null for a Gift template."));
+            AssertEqual(1L, giftBatchTargetCount, $"ItemCommand Gift bulk add safe maximum for {gift.Id} {gift.Name}");
         }
 
         private static void ValidateCommandCompatibility()

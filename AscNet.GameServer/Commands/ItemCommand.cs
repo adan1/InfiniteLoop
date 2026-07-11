@@ -193,7 +193,7 @@ namespace AscNet.GameServer.Commands
             if (itemTable.ItemType == (int)ItemType.Gift)
                 return 1;
 
-            return Inventory.GetMaxCount(itemTable);
+            return Math.Min(Inventory.GetMaxCount(itemTable), Inventory.GlobalItemMaxCount);
         }
     }
 }

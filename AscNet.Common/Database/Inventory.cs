@@ -43,7 +43,6 @@ namespace AscNet.Common.Database
         public const int PokemonStarUpItem = 57;
         public const int PokemonLowStarUpItem = 58;
         public const int PassportExp = 60;
-        private static readonly HashSet<int> MaxCountResearchTicketIds = [50000, 50003, 50005, 50009];
         #endregion
 
         public static readonly IMongoCollection<Inventory> collection = Common.db.GetCollection<Inventory>("inventory");
@@ -136,11 +135,10 @@ namespace AscNet.Common.Database
         {
             if (itemTable?.ItemType == (int)ItemType.Money)
                 return Math.Min(itemTable.MaxCount ?? MoneyItemMaxCount, MoneyItemMaxCount);
-            if (itemTable is not null && MaxCountResearchTicketIds.Contains(itemTable.Id))
-                return MoneyItemMaxCount;
 
-
-            return Math.Min(itemTable?.MaxCount ?? GlobalItemMaxCount, GlobalItemMaxCount);
+            return itemTable?.MaxCount is > 0
+                ? itemTable.MaxCount.Value
+                : GlobalItemMaxCount;
         }
 
         public void Save()
