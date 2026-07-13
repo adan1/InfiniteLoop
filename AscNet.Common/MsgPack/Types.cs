@@ -125,6 +125,9 @@ namespace AscNet.Common.MsgPack
     {
         public long Id { get; set; }
         public bool IsLock { get; set; }
+        public bool IsRandom { get; set; }
+        public long WeaponFashionId { get; set; }
+        public int ColorId { get; set; }
     }
 
     [MessagePackObject(true)]
@@ -509,7 +512,7 @@ namespace AscNet.Common.MsgPack
         public List<EquipData> EquipList { get; set; } = new();
         public List<FashionList> FashionList { get; set; } = new();
         public List<dynamic> FashionSuitList { get; set; } = new();
-        public List<dynamic> FashionColors { get; set; } = new();
+        public Dictionary<int, List<int>> FashionColors { get; set; } = new();
         public List<HeadPortraitList> HeadPortraitList { get; set; } = new();
         public BaseEquipLoginData BaseEquipLoginData { get; set; }
         public FubenData FubenData { get; set; }

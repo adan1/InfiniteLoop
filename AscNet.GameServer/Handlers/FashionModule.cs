@@ -31,6 +31,19 @@ namespace AscNet.GameServer.Handlers
     {
         public int Code { get; set; }
     }
+
+    [MessagePackObject(true)]
+    public class FashionSwitchColorRequest
+    {
+        public uint FashionId { get; set; }
+        public int ColorId { get; set; }
+    }
+
+    [MessagePackObject(true)]
+    public class FashionSwitchColorResponse
+    {
+        public int Code { get; set; }
+    }
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
 
@@ -52,6 +65,49 @@ namespace AscNet.GameServer.Handlers
             }
 
             session.SendResponse(new FashionUseResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("FashionSwitchColorRequest")]
+        public static void HandleFashionSwitchColorRequest(Session session, Packet.Request packet)
+        {
+            const int invalidRequestCode = 20012001;
+            FashionSwitchColorRequest request = packet.Deserialize<FashionSwitchColorRequest>();
+            FashionList? fashion = session.character.Fashions.Find(candidate =>
+                candidate.Id == request.FashionId && !candidate.IsLock);
+            FashionTable? fashionRow = TableReaderV2.Parse<FashionTable>()
+                .Find(candidate => candidate.Id == request.FashionId);
+            FashionColorTable? colorRow = request.ColorId == 0
+                ? null
+                : TableReaderV2.Parse<FashionColorTable>().Find(candidate =>
+                    candidate.Id == request.ColorId
+                    && candidate.OriginalFashionId == request.FashionId);
+
+            if (fashion is null || fashionRow is null || (request.ColorId != 0 && colorRow is null))
+            {
+                session.SendResponse(new FashionSwitchColorResponse { Code = invalidRequestCode }, packet.Id);
+                return;
+            }
+
+            if (fashion.ColorId != request.ColorId)
+            {
+                fashion.ColorId = request.ColorId;
+                session.character.Save();
+            }
+
+            List<int> ownedColors = TableReaderV2.Parse<FashionColorTable>()
+                .Where(candidate => candidate.OriginalFashionId == request.FashionId)
+                .Select(candidate => candidate.Id)
+                .Distinct()
+                .Order()
+                .ToList();
+            session.SendPush(new FashionSyncNotify
+            {
+                FashionList = [fashion],
+                FashionColors = ownedColors.Count == 0
+                    ? []
+                    : new Dictionary<int, List<int>> { [(int)request.FashionId] = ownedColors }
+            });
+            session.SendResponse(new FashionSwitchColorResponse(), packet.Id);
         }
 
         [RequestPacketHandler("FashionUnLockRequest")]

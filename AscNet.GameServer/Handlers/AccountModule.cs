@@ -5,6 +5,7 @@ using AscNet.Common.Util;
 using AscNet.Table.V2.share.chat;
 using AscNet.Table.V2.share.guide;
 using AscNet.Table.V2.share.exhibition;
+using AscNet.Table.V2.share.fashion;
 using MessagePack;
 using System.Diagnostics;
 
@@ -441,7 +442,7 @@ namespace AscNet.GameServer.Handlers
                 FashionList = session.character.Fashions,
                 PartnerList = session.character.Partners,
                 FashionSuitList = [],
-                FashionColors = [],
+                FashionColors = BuildOwnedFashionColors(session.character.Fashions),
                 HeadPortraitList = session.player.HeadPortraits,
                 TeamGroupData = session.player.TeamGroups,
                 TeamPrefabData = new Dictionary<int, dynamic>(),
@@ -494,6 +495,21 @@ namespace AscNet.GameServer.Handlers
             }
 
             return notifyLogin;
+        }
+
+        private static Dictionary<int, List<int>> BuildOwnedFashionColors(IEnumerable<FashionList> fashions)
+        {
+            HashSet<int> ownedFashionIds = fashions
+                .Where(fashion => !fashion.IsLock && fashion.Id is > 0 and <= int.MaxValue)
+                .Select(fashion => (int)fashion.Id)
+                .ToHashSet();
+
+            return TableReaderV2.Parse<FashionColorTable>()
+                .Where(color => color.Id > 0 && ownedFashionIds.Contains(color.OriginalFashionId))
+                .GroupBy(color => color.OriginalFashionId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Select(color => color.Id).Distinct().Order().ToList());
         }
 
         private static bool IsHomeChatShieldFunction(dynamic value)

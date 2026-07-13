@@ -145,9 +145,23 @@ namespace AscNet.GameServer.Handlers
     }
 
     [MessagePackObject(true)]
+    public class CharacterSetHeadInfoRequest
+    {
+        public int TemplateId;
+        public CharacterData.CharacterHead CharacterHeadInfo;
+    }
+
+    [MessagePackObject(true)]
+    public class CharacterSetHeadInfoResponse
+    {
+        public int Code;
+    }
+
+    [MessagePackObject(true)]
     public class FashionSyncNotify
     {
         public List<FashionList> FashionList = new();
+        public Dictionary<int, List<int>> FashionColors = new();
     }
 #pragma warning restore CS8618 // Non-nullable field must contain a non-null value when exiting constructor. Consider declaring as nullable.
     #endregion
@@ -637,6 +651,31 @@ namespace AscNet.GameServer.Handlers
             }
 
             session.SendResponse(new CharacterEnhanceSkillNoticeResponse(), packet.Id);
+        }
+
+        [RequestPacketHandler("CharacterSetHeadInfoRequest")]
+        public static void CharacterSetHeadInfoRequestHandler(Session session, Packet.Request packet)
+        {
+            CharacterSetHeadInfoRequest request = packet.Deserialize<CharacterSetHeadInfoRequest>();
+            CharacterData? character = session.character.Characters.Find(candidate => candidate.Id == request.TemplateId);
+            CharacterData.CharacterHead? requestedHead = request.CharacterHeadInfo;
+            if (character is null || requestedHead is null)
+            {
+                session.SendResponse(new CharacterSetHeadInfoResponse { Code = 20009001 }, packet.Id);
+                return;
+            }
+
+            character.CharacterHeadInfo = new CharacterData.CharacterHead
+            {
+                HeadFashionId = requestedHead.HeadFashionId,
+                HeadFashionType = requestedHead.HeadFashionType
+            };
+            session.SendPush(new NotifyCharacterDataList
+            {
+                CharacterDataList = [character]
+            });
+            session.character.Save();
+            session.SendResponse(new CharacterSetHeadInfoResponse(), packet.Id);
         }
 
         [RequestPacketHandler("CharacterExchangeRequest")]

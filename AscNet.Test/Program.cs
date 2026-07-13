@@ -312,6 +312,18 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--character-head-info-compat-only"))
+                {
+                    ValidateCharacterHeadInfoCompatibility();
+                    return;
+                }
+
+                if (args.Contains("--fashion-color-compat-only"))
+                {
+                    ValidateFashionColorCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--item-sell-compat-only"))
                 {
                     ValidateItemSellCompatibility();
@@ -12492,6 +12504,250 @@ namespace AscNet.Test
             AssertEqual(1, rewardGoods.RewardType, "ItemUseResponse RewardGoodsList[0] RewardType");
             AssertEqual(AscNet.Common.Database.Inventory.Coin, rewardGoods.TemplateId, "ItemUseResponse RewardGoodsList[0] TemplateId");
             AssertEqual(20_000, rewardGoods.Count, "ItemUseResponse RewardGoodsList[0] Count");
+        }
+
+        private static void ValidateCharacterHeadInfoCompatibility()
+        {
+            const int packetId = 19_501;
+            const long playerId = 99_501;
+
+            List<CharacterTable> characterRows = TableReaderV2.Parse<CharacterTable>();
+            List<FashionTable> fashionRows = TableReaderV2.Parse<FashionTable>();
+            CharacterTable characterRow = characterRows.First(row =>
+                row.DefaultNpcFashtionId > 0
+                && fashionRows.Any(fashion =>
+                    fashion.CharacterId == row.Id
+                    && fashion.Id != row.DefaultNpcFashtionId));
+            FashionTable defaultFashion = fashionRows.Single(fashion =>
+                fashion.Id == characterRow.DefaultNpcFashtionId);
+            FashionTable selectableFashion = fashionRows.First(fashion =>
+                fashion.CharacterId == characterRow.Id
+                && fashion.Id != defaultFashion.Id);
+            AssertEqual(characterRow.Id, defaultFashion.CharacterId, "Table-derived default head fashion character");
+            AssertEqual(characterRow.Id, selectableFashion.CharacterId, "Table-derived selectable head fashion character");
+
+            AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
+            CharacterData ownedCharacter =
+                CreateLoginAccountCompatibilityCharacter((uint)characterRow.Id, (uint)defaultFashion.Id);
+            ownedCharacter.LiberateLv = 0;
+            character.Characters = [ownedCharacter];
+            character.Fashions = [];
+
+            using MongoCollectionOverride mongoOverride =
+                MongoCollectionOverride.InstallForDailySignInCompatibility(
+                    out _,
+                    out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> characterCollection,
+                    out _);
+            using LoopbackSessionHarness harness = new(
+                character,
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                sessionId: "character-head-info-compat");
+
+            (uint HeadFashionId, int HeadFashionType, string Name)[] selections =
+            [
+                ((uint)defaultFashion.Id, 0, "default"),
+                ((uint)defaultFashion.Id, 1, "liberation"),
+                ((uint)selectableFashion.Id, 2, "fashion")
+            ];
+            for (int selectionIndex = 0; selectionIndex < selections.Length; selectionIndex++)
+            {
+                (uint requestedFashionId, int requestedType, string name) = selections[selectionIndex];
+                InvokeRequestHandler(
+                    harness,
+                    nameof(CharacterSetHeadInfoRequest),
+                    packetId + selectionIndex,
+                    new CharacterSetHeadInfoRequest
+                    {
+                        TemplateId = characterRow.Id,
+                        CharacterHeadInfo = new CharacterData.CharacterHead
+                        {
+                            HeadFashionId = requestedFashionId,
+                            HeadFashionType = requestedType
+                        }
+                    });
+
+                NotifyCharacterDataList characterPush = ReadPushPayload<NotifyCharacterDataList>(
+                    harness,
+                    nameof(NotifyCharacterDataList),
+                    $"{name} selection first packet");
+                CharacterData pushedCharacter = characterPush.CharacterDataList.Single();
+                AssertEqual((uint)characterRow.Id, pushedCharacter.Id, $"{name} selection pushed character id");
+                AssertEqual(requestedFashionId, pushedCharacter.CharacterHeadInfo.HeadFashionId, $"{name} selection pushed head fashion id");
+                AssertEqual(requestedType, pushedCharacter.CharacterHeadInfo.HeadFashionType, $"{name} selection pushed head fashion type");
+
+                CharacterSetHeadInfoResponse response = ReadResponsePayload<CharacterSetHeadInfoResponse>(
+                    harness.ReadPacket($"{name} selection second packet"),
+                    nameof(CharacterSetHeadInfoResponse));
+                AssertEqual(0, response.Code, $"{name} selection response code");
+                AssertEqual(selectionIndex + 1, characterCollection.ReplaceOneCalls, $"{name} selection saves Character once");
+                CharacterData persistedCharacter = characterCollection.LastReplacement!.Characters.Single();
+                AssertEqual(requestedFashionId, persistedCharacter.CharacterHeadInfo.HeadFashionId, $"{name} selection persisted head fashion id");
+                AssertEqual(requestedType, persistedCharacter.CharacterHeadInfo.HeadFashionType, $"{name} selection persisted head fashion type");
+                if (harness.TryReadAvailablePacket($"{name} selection unexpected packet", out Packet unexpectedPacket))
+                    throw new InvalidDataException($"{name} selection emitted unexpected {unexpectedPacket.Type} packet.");
+            }
+
+            CharacterData bsonCharacter =
+                MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Character>(
+                    characterCollection.LastReplacement!.ToBson()).Characters.Single();
+            AssertEqual((uint)selectableFashion.Id, bsonCharacter.CharacterHeadInfo.HeadFashionId, "Character head info BSON round-trip id");
+            AssertEqual(2, bsonCharacter.CharacterHeadInfo.HeadFashionType, "Character head info BSON round-trip type");
+
+            MethodInfo buildNotifyLogin = RequiredMethod(
+                RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule"),
+                "BuildNotifyLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session)]);
+            NotifyLogin login = (NotifyLogin)(buildNotifyLogin.Invoke(null, [harness.Session])
+                ?? throw new InvalidDataException("BuildNotifyLogin returned null."));
+            LoginCharacterList loginCharacter = login.CharacterList.Single();
+            AssertEqual((uint)selectableFashion.Id, loginCharacter.CharacterHeadInfo.HeadFashionId, "NotifyLogin persisted head fashion id");
+            AssertEqual(2, loginCharacter.CharacterHeadInfo.HeadFashionType, "NotifyLogin persisted head fashion type");
+
+            int missingCharacterId = checked(characterRows.Max(row => row.Id) + 1);
+            AscNet.Common.Database.Character missingCharacter =
+                CreateDrawCompatibilityCharacter(playerId + 1);
+            missingCharacter.Characters = [];
+            using LoopbackSessionHarness missingHarness = new(
+                missingCharacter,
+                CreateDrawCompatibilityPlayer(playerId + 1),
+                CreateDrawCompatibilityInventory(playerId + 1, []),
+                sessionId: "character-head-info-missing-character");
+            InvokeRequestHandler(
+                missingHarness,
+                nameof(CharacterSetHeadInfoRequest),
+                packetId + selections.Length,
+                new CharacterSetHeadInfoRequest
+                {
+                    TemplateId = missingCharacterId,
+                    CharacterHeadInfo = new CharacterData.CharacterHead
+                    {
+                        HeadFashionId = (uint)selectableFashion.Id,
+                        HeadFashionType = 2
+                    }
+                });
+            CharacterSetHeadInfoResponse missingResponse = ReadResponsePayload<CharacterSetHeadInfoResponse>(
+                missingHarness.ReadPacket("missing character response-only packet"),
+                nameof(CharacterSetHeadInfoResponse));
+            AssertEqual(20009001, missingResponse.Code, "Missing character domain error code");
+            AssertEqual(selections.Length, characterCollection.ReplaceOneCalls, "Missing character does not save");
+            if (missingHarness.TryReadAvailablePacket("missing character unexpected push", out Packet missingUnexpectedPacket))
+                throw new InvalidDataException($"Missing character emitted unexpected {missingUnexpectedPacket.Type} packet.");
+        }
+
+        private static void ValidateFashionColorCompatibility()
+        {
+            FashionColorTable colorRow = TableReaderV2.Parse<FashionColorTable>().Single();
+            FashionTable fashionRow = TableReaderV2.Parse<FashionTable>()
+                .Single(row => row.Id == colorRow.OriginalFashionId);
+            const long playerId = 99_401;
+            const int switchPacketId = 19_401;
+            FashionList ownedFashion = new()
+            {
+                Id = fashionRow.Id,
+                IsLock = false,
+                IsRandom = false,
+                WeaponFashionId = 0,
+                ColorId = 0
+            };
+            AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
+            character.Fashions = [ownedFashion];
+
+            using MongoCollectionOverride mongoOverride =
+                MongoCollectionOverride.InstallForDailySignInCompatibility(
+                    out _,
+                    out RecordingMongoCollectionProxy<AscNet.Common.Database.Character> characterCollection,
+                    out _);
+            using LoopbackSessionHarness harness = new(
+                character,
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                sessionId: "fashion-color-compat");
+
+            InvokeRequestHandler(
+                harness,
+                nameof(FashionSwitchColorRequest),
+                switchPacketId,
+                new FashionSwitchColorRequest
+                {
+                    FashionId = (uint)fashionRow.Id,
+                    ColorId = colorRow.Id
+                });
+            FashionSyncNotify colorPush = ReadPushPayload<FashionSyncNotify>(
+                harness,
+                nameof(FashionSyncNotify),
+                nameof(FashionSyncNotify));
+            FashionSwitchColorResponse switchResponse =
+                ReadResponsePayload<FashionSwitchColorResponse>(
+                    harness.ReadPacket(nameof(FashionSwitchColorResponse)),
+                    nameof(FashionSwitchColorResponse));
+            AssertEqual(0, switchResponse.Code, "FashionSwitchColorResponse color code");
+            FashionList pushedFashion = colorPush.FashionList.Single();
+            AssertEqual((long)fashionRow.Id, pushedFashion.Id, "FashionSyncNotify fashion id");
+            AssertEqual(colorRow.Id, pushedFashion.ColorId, "FashionSyncNotify active color id");
+            AssertIntegerList(
+                [colorRow.Id],
+                colorPush.FashionColors[fashionRow.Id].Select(id => (long)id).ToArray(),
+                "FashionSyncNotify owned color ids");
+            AssertEqual(1, characterCollection.ReplaceOneCalls, "Fashion color character save count");
+            FashionList persistedFashion = characterCollection.LastReplacement!.Fashions.Single();
+            AssertEqual(colorRow.Id, persistedFashion.ColorId, "Fashion color persisted selection");
+            FashionList bsonFashion =
+                MongoDB.Bson.Serialization.BsonSerializer.Deserialize<AscNet.Common.Database.Character>(
+                    characterCollection.LastReplacement.ToBson()).Fashions.Single();
+            AssertEqual(colorRow.Id, bsonFashion.ColorId, "Fashion color BSON round-trip");
+
+            MethodInfo buildNotifyLogin = RequiredMethod(
+                RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule"),
+                "BuildNotifyLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session)]);
+            NotifyLogin login = (NotifyLogin)(buildNotifyLogin.Invoke(null, [harness.Session])
+                ?? throw new InvalidDataException("BuildNotifyLogin returned null."));
+            AssertEqual(colorRow.Id, login.FashionList.Single().ColorId, "NotifyLogin active fashion color");
+            AssertIntegerList(
+                [colorRow.Id],
+                login.FashionColors[fashionRow.Id].Select(id => (long)id).ToArray(),
+                "NotifyLogin owned fashion colors");
+
+            InvokeRequestHandler(
+                harness,
+                nameof(FashionSwitchColorRequest),
+                switchPacketId + 1,
+                new FashionSwitchColorRequest
+                {
+                    FashionId = (uint)fashionRow.Id,
+                    ColorId = 0
+                });
+            FashionSyncNotify defaultPush = ReadPushPayload<FashionSyncNotify>(
+                harness,
+                nameof(FashionSyncNotify),
+                "FashionSyncNotify default color");
+            FashionSwitchColorResponse defaultResponse =
+                ReadResponsePayload<FashionSwitchColorResponse>(
+                    harness.ReadPacket("FashionSwitchColorResponse default color"),
+                    nameof(FashionSwitchColorResponse));
+            AssertEqual(0, defaultResponse.Code, "FashionSwitchColorResponse default code");
+            AssertEqual(0, defaultPush.FashionList.Single().ColorId, "FashionSyncNotify default color id");
+            AssertEqual(2, characterCollection.ReplaceOneCalls, "Fashion default color save count");
+
+            InvokeRequestHandler(
+                harness,
+                nameof(FashionSwitchColorRequest),
+                switchPacketId + 2,
+                new FashionSwitchColorRequest
+                {
+                    FashionId = (uint)fashionRow.Id,
+                    ColorId = int.MaxValue
+                });
+            FashionSwitchColorResponse invalidResponse =
+                ReadResponsePayload<FashionSwitchColorResponse>(
+                    harness.ReadPacket("FashionSwitchColorResponse invalid color"),
+                    nameof(FashionSwitchColorResponse));
+            AssertEqual(20012001, invalidResponse.Code, "FashionSwitchColorResponse invalid color code");
+            AssertEqual(0, ownedFashion.ColorId, "Invalid fashion color leaves selection unchanged");
+            AssertEqual(2, characterCollection.ReplaceOneCalls, "Invalid fashion color does not save");
         }
 
         private static void ValidateItemExchangeCompatibility()
