@@ -6,6 +6,7 @@ using AscNet.GameServer;
 using AscNet.GameServer.Handlers;
 using AscNet.SDKServer.Models;
 using AscNet.Table.V2.share.guide;
+using AscNet.Table.V2.share.partner;
 using AscNet.Table.V2.share.fuben;
 using AscNet.Table.V2.share.fuben.mainline;
 using AscNet.Table.V2.share.fuben.mainline2;
@@ -66,6 +67,12 @@ namespace AscNet.Test
                 if (args.Contains("--notify-login-compat-only"))
                 {
                     ValidateNotifyLoginCurrentClientCompatibilityShape();
+                    return;
+                }
+
+                if (args.Contains("--partner-skill-wear-compat-only"))
+                {
+                    ValidatePartnerSkillWearCompatibility();
                     return;
                 }
 
@@ -582,6 +589,225 @@ namespace AscNet.Test
             Item item = ReadItemPush(packet, name).ItemDataList.Single();
             AssertEqual(itemId, item.Id, $"{name} item id");
             AssertEqual(expectedCount, item.Count, $"{name} item count");
+        }
+
+        private static void ValidatePartnerSkillWearCompatibility()
+        {
+            List<PartnerSkillTable> skillRows = TableReaderV2.Parse<PartnerSkillTable>();
+            Dictionary<int, PartnerPassiveSkillGroupTable> passiveGroups = TableReaderV2.Parse<PartnerPassiveSkillGroupTable>()
+                .GroupBy(group => group.Id)
+                .Where(group => group.Count() == 1)
+                .ToDictionary(group => group.Key, group => group.Single());
+            List<PartnerQualityTable> qualityRows = TableReaderV2.Parse<PartnerQualityTable>();
+            Dictionary<int, PartnerMainSkillGroupTable> mainGroups = TableReaderV2.Parse<PartnerMainSkillGroupTable>()
+                .GroupBy(group => group.Id)
+                .Where(group => group.Count() == 1)
+                .ToDictionary(group => group.Key, group => group.Single());
+
+            (PartnerSkillTable Skill, PartnerQualityTable Quality, int[] PassiveIds) fixture = skillRows
+                .SelectMany(skill => qualityRows
+                    .Where(quality => quality.PartnerId == skill.PartnerId
+                        && quality.SkillColumnCount >= 2
+                        && skill.PassiveSkillGroupId.All(passiveGroups.ContainsKey))
+                    .Select(quality => (
+                        Skill: skill,
+                        Quality: quality,
+                        PassiveIds: skill.PassiveSkillGroupId.Select(groupId => passiveGroups[groupId].SkillId).ToArray())))
+                .Where(value => value.PassiveIds.Distinct().Count() > value.Quality.SkillColumnCount)
+                .OrderBy(value => value.Skill.PartnerId)
+                .ThenBy(value => value.Quality.Quality)
+                .FirstOrDefault();
+            if (fixture.Skill is null)
+                throw new InvalidDataException("Partner skill-wear compatibility: tables contain no partner with two passive slots and an overflow skill.");
+
+            int capacity = fixture.Quality.SkillColumnCount;
+            int[] passiveIds = fixture.PassiveIds.Distinct().ToArray();
+            int[] mainGroupIds = fixture.Skill.MainSkillGroupId.Where(mainGroups.ContainsKey).Distinct().ToArray();
+            int[] mainSkillIds = mainGroupIds.SelectMany(groupId => mainGroups[groupId].SkillId).Distinct().ToArray();
+            if (mainSkillIds.Length < 2)
+                throw new InvalidDataException("Partner skill-wear compatibility: fixture needs two table-backed main skills.");
+
+            int packetId = 17_200;
+
+            (LoopbackSessionHarness Harness, PartnerData Partner) CreateCase(string name, IEnumerable<int>? initiallyWorn = null)
+            {
+                HashSet<int> worn = initiallyWorn?.ToHashSet() ?? [];
+                PartnerData partner = new()
+                {
+                    Id = 1,
+                    TemplateId = fixture.Skill.PartnerId,
+                    Quality = fixture.Quality.Quality,
+                    UnlockSkillGroup = mainGroupIds.ToList(),
+                    SkillList =
+                    [
+                        new PartnerSkillData { Id = mainSkillIds[0], Level = 1, IsWear = true, Type = 1 },
+                        .. passiveIds.Select(id => new PartnerSkillData
+                        {
+                            Id = id,
+                            Level = 1,
+                            IsWear = worn.Contains(id),
+                            Type = 2
+                        })
+                    ]
+                };
+                AscNet.Common.Database.Character character = new()
+                {
+                    Uid = 72_000 + packetId,
+                    Characters = [],
+                    Equips = [],
+                    Fashions = [],
+                    Partners = [partner]
+                };
+                return (new LoopbackSessionHarness(character, sessionId: $"partner-skill-wear-{name}"), partner);
+            }
+
+            void AssertNoExtraPacket(LoopbackSessionHarness harness, string name)
+            {
+                if (harness.TryReadAvailablePacket($"{name} unexpected packet", out Packet extra))
+                    throw new InvalidDataException($"{name}: unexpected extra {extra.Type} packet.");
+            }
+
+            void AssertSuccess(
+                string name,
+                IEnumerable<int>? initiallyWorn,
+                List<PartnerSkillWearInfo> entries,
+                Action<PartnerData> assertState)
+            {
+                (LoopbackSessionHarness harness, PartnerData partner) = CreateCase(name, initiallyWorn);
+                using (harness)
+                {
+                    int[] orderBefore = partner.SkillList.Select(skill => skill.Id).ToArray();
+                    InvokeRequestHandler(harness, nameof(PartnerSkillWearRequest), packetId++,
+                        new PartnerSkillWearRequest { PartnerId = partner.Id, SkillType = 2, SkillIdToWear = entries });
+                    Packet pushPacket = harness.ReadPacket($"{name} NotifyPartnerDataList");
+                    AssertEqual(Packet.ContentType.Push, pushPacket.Type, $"{name} first packet type");
+                    Packet.Push push = MessagePackSerializer.Deserialize<Packet.Push>(pushPacket.Content);
+                    AssertEqual(nameof(NotifyPartnerDataList), push.Name, $"{name} first packet name");
+                    NotifyPartnerDataList payload = MessagePackSerializer.Deserialize<NotifyPartnerDataList>(push.Content);
+                    AssertIntegerList([2], payload.OperateTypes.Select(Convert.ToInt64).ToArray(), $"{name} operation types");
+                    AssertEqual(partner.Id, payload.PartnerDataList.Single().Id, $"{name} pushed partner");
+                    AssertEqual(0, ReadResponsePayload<PartnerSkillWearResponse>(
+                        harness.ReadPacket($"{name} PartnerSkillWearResponse"), nameof(PartnerSkillWearResponse)).Code,
+                        $"{name} response code");
+                    AssertIntegerList(orderBefore.Select(Convert.ToInt64).ToArray(),
+                        partner.SkillList.Select(skill => (long)skill.Id).ToArray(), $"{name} skill list order");
+                    assertState(partner);
+                    AssertNoExtraPacket(harness, name);
+                }
+            }
+
+            void AssertFailure(
+                string name,
+                int skillType,
+                List<PartnerSkillWearInfo>? entries,
+                IEnumerable<int>? initiallyWorn = null)
+            {
+                (LoopbackSessionHarness harness, PartnerData partner) = CreateCase(name, initiallyWorn);
+                using (harness)
+                {
+                    (int Id, bool IsWear)[] before = partner.SkillList.Select(skill => (skill.Id, skill.IsWear)).ToArray();
+                    InvokeRequestHandler(harness, nameof(PartnerSkillWearRequest), packetId++,
+                        new PartnerSkillWearRequest { PartnerId = partner.Id, SkillType = skillType, SkillIdToWear = entries! });
+                    AssertEqual(1, ReadResponsePayload<PartnerSkillWearResponse>(
+                        harness.ReadPacket($"{name} PartnerSkillWearResponse"), nameof(PartnerSkillWearResponse)).Code,
+                        $"{name} response code");
+                    (int Id, bool IsWear)[] after = partner.SkillList.Select(skill => (skill.Id, skill.IsWear)).ToArray();
+                    AssertEqual(string.Join(",", before), string.Join(",", after), $"{name} atomic partner state");
+                    AssertNoExtraPacket(harness, name);
+                }
+            }
+
+            AssertSuccess("reported two-passive wear", null,
+                [
+                    new PartnerSkillWearInfo { SkillId = passiveIds[0], IsWear = true },
+                    new PartnerSkillWearInfo { SkillId = passiveIds[1], IsWear = true }
+                ],
+                partner =>
+                {
+                    AssertEqual(true, partner.SkillList.Single(skill => skill.Id == passiveIds[0]).IsWear,
+                        "reported first passive state");
+                    AssertEqual(true, partner.SkillList.Single(skill => skill.Id == passiveIds[1]).IsWear,
+                        "reported second passive state");
+                });
+            AssertSuccess("single passive regression", null,
+                [new PartnerSkillWearInfo { SkillId = passiveIds[0], IsWear = true }],
+                partner => AssertEqual(true, partner.SkillList.Single(skill => skill.Id == passiveIds[0]).IsWear,
+                    "single passive state"));
+
+            int[] full = passiveIds.Take(capacity).ToArray();
+            int replacement = passiveIds[capacity];
+            AssertSuccess("full-capacity false-then-true swap", full,
+                [
+                    new PartnerSkillWearInfo { SkillId = full[0], IsWear = false },
+                    new PartnerSkillWearInfo { SkillId = replacement, IsWear = true }
+                ],
+                partner =>
+                {
+                    AssertEqual(false, partner.SkillList.Single(skill => skill.Id == full[0]).IsWear,
+                        "false-then-true removed state");
+                    AssertEqual(true, partner.SkillList.Single(skill => skill.Id == replacement).IsWear,
+                        "false-then-true replacement state");
+                });
+            AssertSuccess("full-capacity true-then-false swap", full,
+                [
+                    new PartnerSkillWearInfo { SkillId = replacement, IsWear = true },
+                    new PartnerSkillWearInfo { SkillId = full[0], IsWear = false }
+                ],
+                partner =>
+                {
+                    AssertEqual(false, partner.SkillList.Single(skill => skill.Id == full[0]).IsWear,
+                        "true-then-false removed state");
+                    AssertEqual(true, partner.SkillList.Single(skill => skill.Id == replacement).IsWear,
+                        "true-then-false replacement state");
+                });
+
+            AssertFailure("capacity overflow", 2,
+                [new PartnerSkillWearInfo { SkillId = replacement, IsWear = true }], full);
+            int unknownSkillId = passiveIds.Max() == int.MaxValue ? passiveIds.Min() - 1 : passiveIds.Max() + 1;
+            AssertFailure("valid then unknown", 2,
+                [
+                    new PartnerSkillWearInfo { SkillId = passiveIds[0], IsWear = true },
+                    new PartnerSkillWearInfo { SkillId = unknownSkillId, IsWear = true }
+                ]);
+            AssertSuccess("identical duplicate coalescing", null,
+                [
+                    new PartnerSkillWearInfo { SkillId = passiveIds[0], IsWear = true },
+                    new PartnerSkillWearInfo { SkillId = passiveIds[0], IsWear = true }
+                ],
+                partner => AssertEqual(true, partner.SkillList.Single(skill => skill.Id == passiveIds[0]).IsWear,
+                    "identical duplicate state"));
+            AssertFailure("conflicting duplicate", 2,
+                [
+                    new PartnerSkillWearInfo { SkillId = passiveIds[0], IsWear = true },
+                    new PartnerSkillWearInfo { SkillId = passiveIds[0], IsWear = false }
+                ]);
+            AssertFailure("null list", 2, null);
+            AssertFailure("empty list", 2, []);
+            AssertFailure("multi-main", 1,
+                [
+                    new PartnerSkillWearInfo { SkillId = mainSkillIds[0], IsWear = true },
+                    new PartnerSkillWearInfo { SkillId = mainSkillIds[1], IsWear = true }
+                ]);
+
+            (LoopbackSessionHarness mainHarness, PartnerData mainPartner) = CreateCase("valid-main");
+            using (mainHarness)
+            {
+                InvokeRequestHandler(mainHarness, nameof(PartnerSkillWearRequest), packetId++,
+                    new PartnerSkillWearRequest
+                    {
+                        PartnerId = mainPartner.Id,
+                        SkillType = 1,
+                        SkillIdToWear = [new PartnerSkillWearInfo { SkillId = mainSkillIds[1], IsWear = true }]
+                    });
+                AssertPartnerUpdate(mainHarness.ReadPacket("valid main NotifyPartnerDataList"), mainPartner,
+                    "valid main NotifyPartnerDataList");
+                AssertEqual(0, ReadResponsePayload<PartnerSkillWearResponse>(
+                    mainHarness.ReadPacket("valid main PartnerSkillWearResponse"), nameof(PartnerSkillWearResponse)).Code,
+                    "valid main response code");
+                AssertEqual(mainSkillIds[1], mainPartner.SkillList.Single(skill => skill.Type == 1).Id,
+                    "valid main final skill");
+                AssertNoExtraPacket(mainHarness, "valid main");
+            }
         }
 
         private static void ValidatePartnerComposeCompatibility()

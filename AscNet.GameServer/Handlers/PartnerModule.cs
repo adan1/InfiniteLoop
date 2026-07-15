@@ -336,8 +336,8 @@ namespace AscNet.GameServer.Handlers
         {
             PartnerSkillWearRequest request = packet.Deserialize<PartnerSkillWearRequest>();
             PartnerData? partner = FindPartner(session, request.PartnerId);
-            PartnerSkillWearInfo? wear = request.SkillIdToWear?.SingleOrDefault();
-            if (partner is null || wear is null || request.SkillType is not (1 or 2))
+            if (partner is null || request.SkillType is not (1 or 2)
+                || !TryNormalizeSkillWearPlan(request.SkillIdToWear, out Dictionary<int, bool> plan))
             {
                 session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
                 return;
@@ -345,29 +345,95 @@ namespace AscNet.GameServer.Handlers
 
             if (request.SkillType == 1)
             {
-                HashSet<int> available = TableReaderV2.Parse<PartnerMainSkillGroupTable>()
-                    .Where(group => partner.UnlockSkillGroup.Contains(group.Id))
-                    .SelectMany(group => group.SkillId)
-                    .ToHashSet();
-                if (!wear.IsWear || !available.Contains(wear.SkillId))
+                if (plan.Count != 1)
                 {
                     session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
                     return;
                 }
 
-                PartnerSkillData current = partner.SkillList.First(skill => skill.Type == 1);
-                current.Id = wear.SkillId;
-                current.IsWear = true;
-            }
-            else
-            {
-                PartnerSkillData? skill = partner.SkillList.Find(row => row.Type == 2 && row.Id == wear.SkillId);
-                if (skill is null)
+                int mainSkillId = 0;
+                bool hasMainSkill = false;
+                foreach ((int skillId, bool isWear) in plan)
+                {
+                    if (!isWear)
+                        continue;
+                    if (hasMainSkill)
+                    {
+                        session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
+                        return;
+                    }
+                    mainSkillId = skillId;
+                    hasMainSkill = true;
+                }
+
+                HashSet<int> available = TableReaderV2.Parse<PartnerMainSkillGroupTable>()
+                    .Where(group => partner.UnlockSkillGroup.Contains(group.Id))
+                    .SelectMany(group => group.SkillId)
+                    .ToHashSet();
+                PartnerSkillData? current = partner.SkillList.Find(skill => skill.Type == 1);
+                if (!hasMainSkill || !available.Contains(mainSkillId) || current is null)
                 {
                     session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
                     return;
                 }
-                skill.IsWear = wear.IsWear;
+
+                current.Id = mainSkillId;
+                current.IsWear = true;
+            }
+            else
+            {
+                PartnerQualityTable? qualityConfig = null;
+                foreach (PartnerQualityTable row in TableReaderV2.Parse<PartnerQualityTable>())
+                {
+                    if (row.PartnerId != partner.TemplateId || row.Quality != partner.Quality)
+                        continue;
+                    if (qualityConfig is not null)
+                    {
+                        session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
+                        return;
+                    }
+                    qualityConfig = row;
+                }
+
+                if (qualityConfig is null || qualityConfig.SkillColumnCount < 0)
+                {
+                    session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
+                    return;
+                }
+
+                int wornCount = partner.SkillList.Count(skill => skill.Type == 2 && skill.IsWear);
+                foreach ((int skillId, bool isWear) in plan)
+                {
+                    PartnerSkillData? resolved = null;
+                    foreach (PartnerSkillData skill in partner.SkillList)
+                    {
+                        if (skill.Type != 2 || skill.Id != skillId)
+                            continue;
+                        if (resolved is not null)
+                        {
+                            session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
+                            return;
+                        }
+                        resolved = skill;
+                    }
+
+                    if (resolved is null)
+                    {
+                        session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
+                        return;
+                    }
+                    if (resolved.IsWear != isWear)
+                        wornCount += isWear ? 1 : -1;
+                }
+
+                if (wornCount > qualityConfig.SkillColumnCount)
+                {
+                    session.SendResponse(new PartnerSkillWearResponse { Code = ErrorCode }, packet.Id);
+                    return;
+                }
+
+                foreach ((int skillId, bool isWear) in plan)
+                    partner.SkillList.Find(skill => skill.Type == 2 && skill.Id == skillId)!.IsWear = isWear;
             }
 
             SendPartnerUpdate(session, partner);
@@ -511,6 +577,30 @@ namespace AscNet.GameServer.Handlers
 
         private static long ItemCount(Session session, int itemId) =>
             session.inventory.Items.FirstOrDefault(item => item.Id == itemId)?.Count ?? 0;
+
+        private static bool TryNormalizeSkillWearPlan(
+            List<PartnerSkillWearInfo>? requested,
+            out Dictionary<int, bool> plan)
+        {
+            if (requested is null || requested.Count == 0)
+            {
+                plan = null!;
+                return false;
+            }
+            plan = new Dictionary<int, bool>(requested.Count);
+
+            foreach (PartnerSkillWearInfo wear in requested)
+            {
+                if (plan.TryGetValue(wear.SkillId, out bool isWear))
+                {
+                    if (isWear != wear.IsWear)
+                        return false;
+                    continue;
+                }
+                plan.Add(wear.SkillId, wear.IsWear);
+            }
+            return true;
+        }
 
         private static void SendPartnerUpdate(Session session, PartnerData partner) =>
             session.SendPush(new NotifyPartnerDataList
