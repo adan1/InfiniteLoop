@@ -83,6 +83,12 @@ namespace AscNet.Test
                     return;
                 }
 
+                if (args.Contains("--pre-fight-position-compat-only"))
+                {
+                    ValidatePreFightPositionCompatibility();
+                    return;
+                }
+
                 if (args.Contains("--partner-skill-wear-compat-only"))
                 {
                     ValidatePartnerSkillWearCompatibility();
@@ -486,6 +492,7 @@ namespace AscNet.Test
                 ValidateCharacterSwitchLiberateMagicCompatibility();
                 ValidateCharacterSwitchSkillCompatibility();
                 ValidateTeamPrefabCompatibility();
+                ValidatePreFightPositionCompatibility();
                 ValidateCharacterProgressionPersistenceCompatibility();
                 ValidateCharacterSkillGroupTableBackedCompatibility();
                 ValidateCharacterEnhanceSkillTableBackedCompatibility();
@@ -20538,6 +20545,85 @@ namespace AscNet.Test
                 }
 
                 throw new InvalidDataException($"{name}: expected NotifyFubenPrequelData; observed {(pushNames.Count == 0 ? "<none>" : string.Join(", ", pushNames))}.");
+            }
+        }
+
+        private static void ValidatePreFightPositionCompatibility()
+        {
+            const long playerId = 88_064;
+            StageTable stage = TableReaderV2.Parse<StageTable>()
+                .Where(row => row.StageId >= 10_000_000 && row.RobotId.Count == 0)
+                .OrderBy(row => row.StageId)
+                .First();
+            CharacterTable[] characterRows = TableReaderV2.Parse<CharacterTable>()
+                .Where(row => row.Type == 1)
+                .OrderBy(row => row.Id)
+                .Take(3)
+                .ToArray();
+            if (characterRows.Length != 3)
+                throw new InvalidDataException("PreFight position compatibility requires three playable characters.");
+
+            AscNet.Common.Database.Character character = CreateDrawCompatibilityCharacter(playerId);
+            character.Characters = characterRows
+                .Select(row => CreateLoginAccountCompatibilityCharacter(
+                    (uint)row.Id,
+                    (uint)Math.Max(0, row.DefaultNpcFashtionId)))
+                .ToList();
+            using LoopbackSessionHarness harness = new(
+                character,
+                CreateDrawCompatibilityPlayer(playerId),
+                CreateDrawCompatibilityInventory(playerId, []),
+                "pre-fight-position-compat-test");
+
+            uint[] fullTeamCardIds = characterRows.Select(row => (uint)row.Id).ToArray();
+            AssertPositions(fullTeamCardIds, [0, 1, 2], captainPos: 1, firstFightPos: 2, packetId: 13_201,
+                "middle starter");
+            AssertPositions(fullTeamCardIds, [0, 1, 2], captainPos: 3, firstFightPos: 3, packetId: 13_202,
+                "last starter");
+            AssertPositions([fullTeamCardIds[0], 0, fullTeamCardIds[2]], [0, 2],
+                captainPos: 3, firstFightPos: 3, packetId: 13_203, "sparse last starter");
+
+            void AssertPositions(
+                IReadOnlyList<uint> cardIds,
+                IReadOnlyList<long> expectedNpcPositions,
+                int captainPos,
+                int firstFightPos,
+                int packetId,
+                string name)
+            {
+                PreFightRequest request = new()
+                {
+                    PreFightData = new()
+                    {
+                        StageId = (uint)stage.StageId,
+                        CardIds = cardIds.ToList(),
+                        CaptainPos = captainPos,
+                        FirstFightPos = firstFightPos
+                    }
+                };
+                InvokeRegisteredRequestHandler(nameof(PreFightRequest), harness.Session, packetId, request);
+                PreFightResponse response = ReadResponsePayload<PreFightResponse>(
+                    harness,
+                    packetId,
+                    nameof(PreFightResponse),
+                    $"{name} PreFightResponse");
+                AssertEqual(0, response.Code, $"{name} Code");
+                PreFightResponse.PreFightResponseFightData fightData = response.FightData
+                    ?? throw new InvalidDataException($"{name}: missing FightData.");
+                PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData role =
+                    fightData.RoleData.Single(value => value.Id == playerId);
+                AssertEqual(captainPos - 1, role.CaptainIndex, $"{name} zero-based captain index");
+                AssertEqual(firstFightPos - 1, role.FirstFightPos, $"{name} zero-based first-fight position");
+                AssertIntegerList(
+                    expectedNpcPositions,
+                    role.NpcData.Keys.OrderBy(value => value).Select(value => (long)value).ToArray(),
+                    $"{name} NpcData positions");
+                AssertEqual(
+                    firstFightPos,
+                    harness.Session.fight?.PreFight.PreFightData.FirstFightPos ?? 0,
+                    $"{name} session preserves request position");
+                if (harness.TryReadAvailablePacket($"{name} unexpected packet", out Packet extra))
+                    throw new InvalidDataException($"{name}: unexpected extra {extra.Type} packet.");
             }
         }
 

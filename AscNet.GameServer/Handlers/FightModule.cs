@@ -438,12 +438,12 @@ namespace AscNet.GameServer.Handlers
                 Camp = 1,
                 Name = session.player.PlayerData.Name,
                 IsRobot = false,
+                CaptainIndex = req.PreFightData.CaptainPos > 0 ? req.PreFightData.CaptainPos - 1 : 0,
+                FirstFightPos = req.PreFightData.FirstFightPos > 0 ? req.PreFightData.FirstFightPos - 1 : 0,
                 NpcData = new()
             });
 
-            IReadOnlyList<uint> cardIdsToDeploy = (req.PreFightData.CardIds ?? [])
-                .Where(cardId => cardId > 0)
-                .ToList();
+            IReadOnlyList<uint> cardIdsToDeploy = req.PreFightData.CardIds ?? [];
             List<int> requestedRobotIds = req.PreFightData.RobotIds?
                 .Where(robotId => robotId > 0)
                 .ToList() ?? [];
@@ -491,7 +491,7 @@ namespace AscNet.GameServer.Handlers
                 robotIds = deployableRobotIds;
             }
 
-            if (robotIds.Count == 0 && cardIdsToDeploy.Count == 0)
+            if (robotIds.Count == 0 && !cardIdsToDeploy.Any(cardId => cardId > 0))
             {
                 int currentTeamId = (int)session.player.PlayerData.CurrTeamId;
                 if (session.player.TeamGroups.TryGetValue(currentTeamId, out TeamGroupDatum? teamGroup))
@@ -499,15 +499,20 @@ namespace AscNet.GameServer.Handlers
                     cardIdsToDeploy = teamGroup.TeamData
                         .OrderBy(member => member.Key)
                         .Select(member => (uint)member.Value)
-                        .Where(cardId => cardId > 0)
                         .ToList();
                 }
             }
+
+            Dictionary<int, dynamic> playerNpcData = rsp.FightData.RoleData
+                .First(role => role.Id == session.player.PlayerData.Id)
+                .NpcData;
 
             long currentUnixTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             for (int i = 0; i < cardIdsToDeploy.Count; i++)
             {
                 uint cardId = cardIdsToDeploy[i];
+                if (cardId == 0)
+                    continue;
                 CharacterData? characterData = session.character.Characters.FirstOrDefault(x => x.Id == cardId);
                 IEnumerable<EquipData> equips;
                 if (characterData is null)
@@ -524,7 +529,7 @@ namespace AscNet.GameServer.Handlers
                 }
 
                 PartnerData? partner = session.character.Partners.FirstOrDefault(x => x.CharacterId == characterData.Id);
-                rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Add(i, new
+                playerNpcData.Add(i, new
                 {
                     Character = characterData,
                     Equips = equips,
@@ -537,10 +542,11 @@ namespace AscNet.GameServer.Handlers
                 });
             }
 
+            int deployedCharacterCount = playerNpcData.Count;
             if (robotIds.Count > 0
-                && (stageTable is null || req.PreFightData.CardIds is null || cardIdsToDeploy.Count == 0 || (cardIdsToDeploy.Count + robotIds.Count) == 3))
+                && (stageTable is null || req.PreFightData.CardIds is null || deployedCharacterCount == 0 || (deployedCharacterCount + robotIds.Count) == 3))
             {
-                int npcKey = rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Keys.Count;
+                int npcKey = 0;
                 foreach (var robotId in robotIds)
                 {
                     RobotTable? robot = robotRowsToDeploy.GetValueOrDefault(robotId);
@@ -549,6 +555,9 @@ namespace AscNet.GameServer.Handlers
                         session.log.Warn($"[STAGE-PROBE] PreFightRobotTableMissing stageId={req.PreFightData.StageId} robotId={robotId}");
                         continue;
                     }
+
+                    while (playerNpcData.ContainsKey(npcKey))
+                        npcKey++;
 
                     CharacterSkillTable? characterSkill = TableReaderV2.Parse<CharacterSkillTable>().Find(x => x.CharacterId == robot.CharacterId);
                     IEnumerable<int> skills = characterSkill?.SkillGroupId.SelectMany(x => TableReaderV2.Parse<CharacterSkillGroupTable>().Find(y => y.Id == x)?.SkillId ?? new List<int>()) ?? new List<int>();
@@ -578,7 +587,7 @@ namespace AscNet.GameServer.Handlers
                         });
                     }
 
-                    rsp.FightData.RoleData.First(x => x.Id == session.player.PlayerData.Id).NpcData.Add(npcKey, new
+                    playerNpcData.Add(npcKey, new
                     {
                         Character = new CharacterData()
                         {
