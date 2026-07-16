@@ -28,6 +28,7 @@ using AscNet.Table.V2.share.team;
 using AscNet.Table.V2.share.attrib;
 using AscNet.Table.V2.share.item;
 using AscNet.Table.V2.share.fashion;
+using AscNet.Table.V2.share.player;
 using AscNet.Table.V2.share.robot;
 using AscNet.Table.V2.client.draw;
 using MessagePack;
@@ -20061,6 +20062,110 @@ namespace AscNet.Test
                 ?? throw new InvalidDataException("AddCharacterExp returned nil for Camu at terminal level.");
             AssertEqual(80, terminalResult.Level, "AddCharacterExp terminal guard level");
             AssertEqual(0U, terminalResult.Exp, "AddCharacterExp terminal guard exp");
+
+            List<PlayerTable> orderedPlayerLevels = TableReaderV2.Parse<PlayerTable>()
+                .OrderBy(row => row.Level)
+                .ToList();
+            if (orderedPlayerLevels.Count < 2)
+                throw new InvalidDataException($"PlayerTable: expected at least two configured commandant levels, got {orderedPlayerLevels.Count}.");
+            PlayerTable penultimatePlayerLevel = orderedPlayerLevels[^2];
+            PlayerTable terminalPlayerLevel = orderedPlayerLevels[^1];
+            if (penultimatePlayerLevel.MaxExp <= 0 || terminalPlayerLevel.MaxExp <= 0)
+            {
+                throw new InvalidDataException(
+                    $"PlayerTable: expected positive EXP thresholds for terminal progression coverage, got level {penultimatePlayerLevel.Level}: {penultimatePlayerLevel.MaxExp}, level {terminalPlayerLevel.Level}: {terminalPlayerLevel.MaxExp}.");
+            }
+
+            const long commandantPlayerId = 92_001;
+            AscNet.Common.Database.Inventory terminalInventory = CreateDrawCompatibilityInventory(
+                commandantPlayerId,
+                [new Item { Id = AscNet.Common.Database.Inventory.TeamExp, Count = terminalPlayerLevel.MaxExp }]);
+            AscNet.Common.Database.Player terminalPlayer = CreateDrawCompatibilityPlayer(commandantPlayerId);
+            terminalPlayer.PlayerData.Level = terminalPlayerLevel.Level;
+            using (LoopbackSessionHarness terminalHarness = new(
+                CreateDrawCompatibilityCharacter(commandantPlayerId),
+                terminalPlayer,
+                terminalInventory,
+                "commandant-terminal-exp-test"))
+            {
+                terminalHarness.Session.ExpSanityCheck();
+                AssertEqual(terminalPlayerLevel.Level, terminalPlayer.PlayerData.Level, "ExpSanityCheck terminal threshold level");
+                AssertEqual((long)terminalPlayerLevel.MaxExp, terminalInventory.Items.Single(item => item.Id == AscNet.Common.Database.Inventory.TeamExp).Count, "ExpSanityCheck terminal threshold retained EXP");
+            }
+
+            long crossingExp = (long)penultimatePlayerLevel.MaxExp + terminalPlayerLevel.MaxExp + 1;
+            AscNet.Common.Database.Inventory crossingInventory = CreateDrawCompatibilityInventory(
+                commandantPlayerId + 1,
+                [new Item { Id = AscNet.Common.Database.Inventory.TeamExp, Count = crossingExp }]);
+            AscNet.Common.Database.Player crossingPlayer = CreateDrawCompatibilityPlayer(commandantPlayerId + 1);
+            crossingPlayer.PlayerData.Level = penultimatePlayerLevel.Level;
+            using (LoopbackSessionHarness crossingHarness = new(
+                CreateDrawCompatibilityCharacter(commandantPlayerId + 1),
+                crossingPlayer,
+                crossingInventory,
+                "commandant-penultimate-exp-test"))
+            {
+                crossingHarness.Session.ExpSanityCheck();
+                AssertEqual(terminalPlayerLevel.Level, crossingPlayer.PlayerData.Level, "ExpSanityCheck penultimate crossing bounded terminal level");
+                AssertEqual(crossingExp - penultimatePlayerLevel.MaxExp, crossingInventory.Items.Single(item => item.Id == AscNet.Common.Database.Inventory.TeamExp).Count, "ExpSanityCheck penultimate crossing retained terminal surplus");
+            }
+
+            AscNet.GameServer.Commands.CommandFactory.commands.Clear();
+            AscNet.GameServer.Commands.CommandFactory.LoadCommands();
+            long commandExp = (long)terminalPlayerLevel.MaxExp + 1;
+            AscNet.Common.Database.Inventory commandInventory = CreateDrawCompatibilityInventory(
+                commandantPlayerId + 2,
+                [new Item { Id = AscNet.Common.Database.Inventory.TeamExp, Count = commandExp }]);
+            AscNet.Common.Database.Player commandPlayer = CreateDrawCompatibilityPlayer(commandantPlayerId + 2);
+            commandPlayer.PlayerData.Level = penultimatePlayerLevel.Level;
+            using (LoopbackSessionHarness commandHarness = new(
+                CreateDrawCompatibilityCharacter(commandantPlayerId + 2),
+                commandPlayer,
+                commandInventory,
+                "level-max-command-test"))
+            {
+                AscNet.GameServer.Commands.Command command = AscNet.GameServer.Commands.CommandFactory.CreateCommand(
+                    "level",
+                    commandHarness.Session,
+                    ["max"])
+                    ?? throw new InvalidDataException("/level max: expected CommandFactory.CreateCommand to create command 'level'.");
+                command.Execute();
+                AssertEqual(terminalPlayerLevel.Level, commandPlayer.PlayerData.Level, "/level max post-set ExpSanityCheck terminal level");
+                AssertEqual(commandExp, commandInventory.Items.Single(item => item.Id == AscNet.Common.Database.Inventory.TeamExp).Count, "/level max post-set ExpSanityCheck retained EXP");
+            }
+
+            AscNet.Common.Database.Player aboveMaximumPlayer = CreateDrawCompatibilityPlayer(commandantPlayerId + 3);
+            aboveMaximumPlayer.PlayerData.Level = terminalPlayerLevel.Level + 1;
+            using (LoopbackSessionHarness aboveMaximumHarness = new(
+                CreateDrawCompatibilityCharacter(commandantPlayerId + 3),
+                aboveMaximumPlayer,
+                CreateDrawCompatibilityInventory(commandantPlayerId + 3, []),
+                "commandant-above-maximum-clamp-test"))
+            {
+                AssertEqual(true, aboveMaximumHarness.Session.ClampPlayerLevelToConfiguredMaximum(), "Persisted above-maximum commandant clamp reports change");
+                AssertEqual(terminalPlayerLevel.Level, aboveMaximumPlayer.PlayerData.Level, "Persisted above-maximum commandant clamps to configured terminal");
+                AssertEqual(false, aboveMaximumHarness.Session.ClampPlayerLevelToConfiguredMaximum(), "Configured-terminal commandant clamp reports no change");
+                AssertEqual(terminalPlayerLevel.Level, aboveMaximumPlayer.PlayerData.Level, "Configured-terminal commandant clamp preserves level");
+            }
+
+            MethodInfo clampPlayerLevel = RequiredMethod(
+                typeof(SessionExtensions),
+                nameof(SessionExtensions.ClampPlayerLevelToConfiguredMaximum),
+                BindingFlags.Static | BindingFlags.Public,
+                [typeof(Session)]);
+            Type accountModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.AccountModule");
+            MethodInfo doLogin = RequiredMethod(
+                accountModule,
+                "DoLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session), typeof(bool)]);
+            Type arenaModule = RequiredAscNetGameServerType("AscNet.GameServer.Handlers.ArenaModule");
+            MethodInfo reconcileLogin = RequiredMethod(
+                arenaModule,
+                "ReconcileLogin",
+                BindingFlags.Static | BindingFlags.NonPublic,
+                [typeof(Session), typeof(long?)]);
+            AssertCallPrecedes(doLogin, clampPlayerLevel, reconcileLogin, "AccountModule.DoLogin commandant level recovery before arena reconciliation");
 
             MethodInfo fightSettleHandler = GetRegisteredRequestHandlerMethod("FightSettleRequest");
             AssertEqual("FightSettleRequestHandler", fightSettleHandler.Name, "FightSettleRequest registered handler method");

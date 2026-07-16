@@ -1033,6 +1033,7 @@ Sorry for the inconvenience.
             }
             RepairClaimedGatherFashionRewards(session);
             session.player.NormalizeTeamPrefabs();
+            session.ClampPlayerLevelToConfiguredMaximum();
 
             (ActivityResultNotify? arenaResult, NotifyArenaActivity arenaActivity) = ArenaModule.ReconcileLogin(session);
 
