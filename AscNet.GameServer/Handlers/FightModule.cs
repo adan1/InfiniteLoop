@@ -432,6 +432,7 @@ namespace AscNet.GameServer.Handlers
                 }
             }
 
+            long currentUnixTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             for (int i = 0; i < cardIdsToDeploy.Count; i++)
             {
                 uint cardId = cardIdsToDeploy[i];
@@ -455,6 +456,11 @@ namespace AscNet.GameServer.Handlers
                 {
                     Character = characterData,
                     Equips = equips,
+                    WeaponFashionId = session.character.WeaponFashions
+                        .Find(fashion =>
+                            (fashion.ExpireTime == 0 || fashion.ExpireTime > currentUnixTime)
+                            && fashion.UseCharacterList.Contains((int)characterData.Id))
+                        ?.Id ?? 0,
                     Partner = partner
                 });
             }
@@ -524,6 +530,7 @@ namespace AscNet.GameServer.Handlers
                             }
                         },
                         Equips = equips,
+                        WeaponFashionId = robot.WeaponFashion ?? 0,
                         Partner = (PartnerData?)null,
                         IsRobot = true,
                         RobotId = robotId,

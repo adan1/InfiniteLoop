@@ -13387,6 +13387,63 @@ namespace AscNet.Test
             if (harness.TryReadAvailablePacket($"{requestName} idempotent unexpected packet", out Packet idempotentExtra))
                 throw new InvalidDataException($"{requestName} idempotent request emitted unexpected {idempotentExtra.Type} packet.");
 
+            InvokeRegisteredRequestHandler(
+                nameof(PreFightRequest),
+                harness.Session,
+                packetId,
+                new PreFightRequest
+                {
+                    PreFightData = new PreFightRequest.PreFightRequestPreFightData
+                    {
+                        StageId = 10_010_101,
+                        CardIds = [characterId, otherCharacterId],
+                        RobotIds = []
+                    }
+                });
+            PreFightResponse preFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness, packetId++, nameof(PreFightResponse), "weapon fashion PreFightResponse");
+            PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData playerRole =
+                preFightResponse.FightData.RoleData.Single(role => role.Id == playerId);
+            System.Collections.IDictionary firstNpc = RequiredDynamicMap(
+                (object?)playerRole.NpcData[0], "weapon fashion first battle NPC");
+            System.Collections.IDictionary secondNpc = RequiredDynamicMap(
+                (object?)playerRole.NpcData[1], "weapon fashion second battle NPC");
+            AssertEqual(swapFashionId,
+                RequiredDynamicInteger(firstNpc, "WeaponFashionId", "weapon fashion first battle NPC"),
+                "PreFightResponse first equipped weapon coating");
+            AssertEqual(capturedFashionId,
+                RequiredDynamicInteger(secondNpc, "WeaponFashionId", "weapon fashion second battle NPC"),
+                "PreFightResponse second equipped weapon coating");
+
+            WeaponFashionData swapFashion = reloaded.WeaponFashions.Single(fashion => fashion.Id == swapFashionId);
+            WeaponFashionData expiredFashion = reloaded.WeaponFashions.Single(fashion => fashion.Id == expiredFashionId);
+            swapFashion.UseCharacterList.Clear();
+            expiredFashion.UseCharacterList.Add(storedCharacterId);
+            InvokeRegisteredRequestHandler(
+                nameof(PreFightRequest),
+                harness.Session,
+                packetId,
+                new PreFightRequest
+                {
+                    PreFightData = new PreFightRequest.PreFightRequestPreFightData
+                    {
+                        StageId = 10_010_101,
+                        CardIds = [characterId],
+                        RobotIds = []
+                    }
+                });
+            PreFightResponse expiredPreFightResponse = ReadResponsePayload<PreFightResponse>(
+                harness, packetId++, nameof(PreFightResponse), "expired weapon fashion PreFightResponse");
+            PreFightResponse.PreFightResponseFightData.PreFightResponseFightDataRoleData expiredPlayerRole =
+                expiredPreFightResponse.FightData.RoleData.Single(role => role.Id == playerId);
+            System.Collections.IDictionary expiredNpc = RequiredDynamicMap(
+                (object?)expiredPlayerRole.NpcData[0], "expired weapon fashion battle NPC");
+            AssertEqual(0,
+                RequiredDynamicInteger(expiredNpc, "WeaponFashionId", "expired weapon fashion battle NPC"),
+                "PreFightResponse excludes expired weapon coating");
+            expiredFashion.UseCharacterList.Clear();
+            swapFashion.UseCharacterList.Add(storedCharacterId);
+
             static (int Id, long ExpireTime, int[] Characters)[] Snapshot(
                 AscNet.Common.Database.Character source) =>
                 source.WeaponFashions.Select(fashion =>
@@ -13473,7 +13530,7 @@ namespace AscNet.Test
             Console.WriteLine(
                 $"Weapon fashion use compatibility passed: fields Id/CharacterId; packets " +
                 $"{nameof(NotifyWeaponFashionInfo)} -> {responseName}; captured default/equip, BSON/{nameof(NotifyLogin)}, " +
-                "ordered direct swap, multi-character preservation, idempotency, and atomic rejection.");
+                "ordered direct swap, battle propagation, multi-character preservation, idempotency, and atomic rejection.");
         }
 
         private static void ValidateItemUseCompatibility()
